@@ -707,6 +707,7 @@ def run_guard() -> dict[str, Any]:
                             "status": result.get("instance_status"),
                             "action": result.get("action"),
                             "reason": result.get("reason"),
+                            "warning": result.get("warning"),
                             "error": None,
                         }
                     )
@@ -817,6 +818,7 @@ def run_guard() -> dict[str, Any]:
                     "status": result.get("instance_status"),
                     "action": result.get("action"),
                     "reason": result.get("reason"),
+                    "warning": result.get("warning"),
                     "error": result.get("last_error"),
                 }
             )

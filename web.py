@@ -1721,6 +1721,34 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     .log-item summary {{ cursor: pointer; list-style: none; }}
     .log-item summary::-webkit-details-marker {{ display: none; }}
     .log-meta {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; }}
+    .log-filter-tabs {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }}
+    .log-filter-tab {{
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 720;
+      padding: 6px 10px;
+      text-decoration: none;
+    }}
+    .log-filter-tab.active {{
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }}
+    .log-filter-tab:hover {{ text-decoration: none; }}
+    .log-note {{
+      background: #f8fafc;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+      padding: 10px 14px;
+    }}
     .grid-full {{ grid-column: 1 / -1; }}
     .asset-toolbar {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
     @media (max-width: 1180px) {{
@@ -2736,41 +2764,96 @@ def render_logs_page(query: dict[str, list[str]] | None = None) -> bytes:
     selected_id = query.get("server", [""])[0]
     if not selected_id and configured:
         selected_id = str(configured[0].get("id") or configured[0].get("instance_id"))
+    view = query.get("view", ["important"])[0]
+    if view not in {"important", "normal", "all"}:
+        view = "important"
+
+    def is_important_log(event: dict) -> bool:
+        action = str(event.get("action") or "")
+        if event.get("error"):
+            return True
+        if event.get("warning"):
+            return True
+        if action in {"stop", "start", "manual_stop", "manual_start", "manual_stopped", "keep_stopped", "hold", "error", "disabled"}:
+            return True
+        if str(event.get("status") or "") in {"Stopped", "Stopping"}:
+            return True
+        try:
+            traffic_gb = float(event.get("traffic_gb"))
+        except (TypeError, ValueError):
+            traffic_gb = None
+        if traffic_gb is not None and action != "keep_running" and action:
+            return True
+        return False
+
+    def log_view_url(server_id: str, target_view: str) -> str:
+        return f"/logs?server={esc(server_id)}&view={esc(target_view)}"
 
     server_links = []
     for server in configured:
         server_id = str(server.get("id") or server.get("instance_id"))
         stat = status_by_id.get(server_id, {})
         active = "active" if server_id == selected_id else ""
-        count = sum(1 for event in history if str(event.get("id")) == server_id)
+        server_history = [event for event in history if str(event.get("id")) == server_id]
+        important_count = sum(1 for event in server_history if is_important_log(event))
+        normal_count = len(server_history) - important_count
         name = first_value(server.get("product_name"), server.get("label"), stat.get("label"), default=server_id)
         server_links.append(
             f"""
-            <a href="/logs?server={esc(server_id)}" class="list-group-item list-group-item-action {active}">
+            <a href="{log_view_url(server_id, view)}" class="list-group-item list-group-item-action {active}">
               <div class="d-flex align-items-center">
                 <div class="flex-fill">
                   <div class="fw-semibold">{esc(name)}</div>
                   <div class="text-secondary small">{esc(server.get('instance_id'))}</div>
+                  <div class="text-secondary small">正常记录 {esc(normal_count)} 条</div>
                 </div>
-                <span class="badge bg-secondary-lt">{count}</span>
+                <span class="badge {'bg-red-lt' if important_count else 'bg-secondary-lt'}">{important_count}</span>
               </div>
             </a>
             """
         )
 
-    selected_logs = [
+    all_selected_logs = [
         event for event in reversed(history)
         if not selected_id or str(event.get("id")) == selected_id
     ]
+    important_logs = [event for event in all_selected_logs if is_important_log(event)]
+    normal_logs = [event for event in all_selected_logs if not is_important_log(event)]
+    if view == "important":
+        selected_logs = important_logs[:200]
+    elif view == "normal":
+        selected_logs = normal_logs[:200]
+    else:
+        selected_logs = all_selected_logs[:200]
+    current_name = selected_id
+    for server in configured:
+        server_id = str(server.get("id") or server.get("instance_id"))
+        if server_id == selected_id:
+            current_name = first_value(server.get("product_name"), server.get("label"), default=server_id)
+            break
+    filter_tabs = f"""
+      <div class="log-filter-tabs">
+        <a class="log-filter-tab {'active' if view == 'important' else ''}" href="{log_view_url(selected_id, 'important')}">重要事件 {len(important_logs)}</a>
+        <a class="log-filter-tab {'active' if view == 'normal' else ''}" href="{log_view_url(selected_id, 'normal')}">正常记录 {len(normal_logs)}</a>
+        <a class="log-filter-tab {'active' if view == 'all' else ''}" href="{log_view_url(selected_id, 'all')}">全部 {len(all_selected_logs)}</a>
+      </div>
+    """
+    note_map = {
+        "important": "默认只展示异常、开机、关机、停机保持、流量预警和回差保持。正常 keep_running 巡检会收进“正常记录”。",
+        "normal": "这里是普通巡检记录，主要用于排查历史趋势；日常不需要一直盯着看。",
+        "all": "全部记录包含正常巡检流水，数量会比较多。",
+    }
     log_items = []
     for event in selected_logs:
-        danger = bool(event.get("error"))
+        important = is_important_log(event)
+        danger = bool(event.get("error")) or str(event.get("action") or "") in {"stop", "keep_stopped", "manual_stopped", "error"}
+        warning = str(event.get("action") or "") == "hold"
         log_items.append(
             f"""
             <details class="list-group-item log-item">
               <summary>
                 <div class="row align-items-center">
-                  <div class="col-auto"><span class="status-dot {'bg-red' if danger else 'bg-green'} d-block"></span></div>
+                  <div class="col-auto"><span class="status-dot {'bg-red' if danger else ('bg-yellow' if warning else ('bg-blue' if important else 'bg-green'))} d-block"></span></div>
                   <div class="col text-truncate">
                     <div class="fw-semibold">{esc(event.get('label'))} · {esc(event.get('action'))}</div>
                     <div class="text-secondary text-truncate">{esc(event.get('reason'))}</div>
@@ -2799,18 +2882,23 @@ def render_logs_page(query: dict[str, list[str]] | None = None) -> bytes:
       <div class="card">
         <div class="card-header">
           <div class="asset-toolbar w-100">
-            <h3 class="card-title">日志详情</h3>
+            <div>
+              <h3 class="card-title">日志详情</h3>
+              <div class="text-secondary small">{esc(current_name)}</div>
+            </div>
+            {filter_tabs}
             <a class="btn btn-sm" href="/api/history">历史 JSON</a>
           </div>
         </div>
-        <div class="list-group list-group-flush">{''.join(log_items) if log_items else '<div class="list-group-item text-secondary">暂无日志</div>'}</div>
+        <div class="log-note">{esc(note_map.get(view, note_map['important']))}</div>
+        <div class="list-group list-group-flush">{''.join(log_items) if log_items else '<div class="list-group-item text-secondary">暂无符合条件的日志</div>'}</div>
       </div>
     </div>
     """
     return page_shell(
         "logs",
         "服务器日志",
-        "按服务器查看最近巡检、启停和错误记录",
+        "默认聚焦异常、启停、预警和需要处理的事件",
         body,
         actions=render_check_action(),
     )
