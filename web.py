@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import notifications
@@ -269,27 +270,20 @@ def render_recovery_plan(item: dict) -> str:
     else:
         reset_hint = f"来源：{source_label} · 每月 {plan.get('traffic_reset_day') or 1} 日 00:00 UTC"
     return f"""
-      <div class="recovery-panel {status_class}">
-        <div>
-          <div class="recovery-title">{esc(status_text)}</div>
-          <div class="recovery-copy">{esc(plan.get('recovery_note') or '')}</div>
+      <div class="reset-summary {status_class}">
+        <div class="reset-main">
+          <div class="info-label">账期重置时间</div>
+          <div class="reset-time">{esc(fmt_time(plan.get('next_reset_at')))}</div>
+          <div class="text-secondary small">{esc(reset_hint)}</div>
         </div>
-        <div class="recovery-count">
+        <div class="reset-count">
           <div class="recovery-days">{esc(days)}</div>
           <div class="recovery-unit">天后重置</div>
         </div>
       </div>
-      <div class="detail-grid mt-3">
-        <div class="detail-item">
-          <div class="info-label">账期重置时间</div>
-          <div class="info-value">{esc(fmt_time(plan.get('next_reset_at')))}</div>
-          <div class="text-secondary small">{esc(reset_hint)}</div>
-        </div>
-        <div class="detail-item">
-          <div class="info-label">恢复判断</div>
-          <div class="info-value">{esc('自动巡检会开机' if will_auto_start else '暂不自动开机')}</div>
-          <div class="text-secondary small">恢复阈值 {fmt_gb(item.get('start_threshold_gb'))}</div>
-        </div>
+      <div class="reset-foot">
+        <span>{esc(status_text)}</span>
+        <span>恢复阈值 {fmt_gb(item.get('start_threshold_gb'))}</span>
       </div>
     """
 
@@ -1077,6 +1071,24 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }}
     .detail-item {{ min-width: 0; }}
+    .detail-disclosure > summary {{
+      align-items: center;
+      color: #111827;
+      cursor: pointer;
+      display: flex;
+      font-size: 13px;
+      font-weight: 760;
+      justify-content: space-between;
+      list-style: none;
+    }}
+    .detail-disclosure > summary::-webkit-details-marker {{ display: none; }}
+    .detail-disclosure > summary::after {{
+      color: var(--muted);
+      content: "展开";
+      font-size: 12px;
+      font-weight: 720;
+    }}
+    .detail-disclosure[open] > summary::after {{ content: "收起"; }}
     .info-label {{
       color: var(--muted);
       font-size: 12px;
@@ -1100,6 +1112,39 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       color: #111827;
       font-size: 18px;
       font-weight: 720;
+    }}
+    .reset-summary {{
+      align-items: center;
+      background: var(--surface-soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) 96px;
+      padding: 12px;
+    }}
+    .reset-time {{
+      color: #111827;
+      font-size: 16px;
+      font-weight: 760;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }}
+    .reset-count {{
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 8px;
+      text-align: center;
+    }}
+    .reset-foot {{
+      color: var(--muted);
+      display: flex;
+      flex-wrap: wrap;
+      font-size: 12px;
+      gap: 8px 14px;
+      justify-content: space-between;
+      margin-top: 8px;
     }}
     .traffic-delta {{
       border-radius: 999px;
@@ -2318,15 +2363,58 @@ def render_traffic_breakdown(item: dict) -> str:
             </div>
             """
         )
-    request_id = item.get("traffic_request_id")
-    request_line = f'<div class="text-secondary small mt-2">CDT API RequestId：{esc(request_id)}</div>' if request_id else ""
+    return f'<div class="breakdown-list">{"".join(rows)}</div>'
+
+
+def render_diagnostics(item: dict, identity: dict[str, Any], manual_note: str) -> str:
+    plan = item.get("recovery_plan") or {}
     matched = item.get("traffic_matched_detail_count")
     total = item.get("traffic_detail_count")
-    count_line = ""
+    match_line = "未知"
     if matched is not None and total is not None:
-        count_line = f'<div class="text-secondary small mt-2">CDT 明细匹配 {esc(matched)} / {esc(total)} 条</div>'
-    scope_line = f'<div class="text-secondary small mt-2">统计范围：{esc(traffic_pool_text(item))}</div>'
-    return f'<div class="breakdown-list">{"".join(rows)}</div>{scope_line}{count_line}{request_line}'
+        match_line = f"{matched} / {total} 条"
+    return f"""
+      <details class="detail-section detail-disclosure">
+        <summary>更多诊断信息</summary>
+        <div class="detail-grid mt-3">
+          <div class="detail-item">
+            <div class="info-label">当前判断</div>
+            <div>{badge(item.get('action'))}</div>
+            <div class="text-secondary small mt-2">{esc(item.get('reason'))}</div>
+            {f'<div class="text-danger small mt-1">{esc(manual_note)}</div>' if manual_note else ''}
+            {f'<div class="text-danger small mt-1">{esc(item.get("last_error"))}</div>' if item.get("last_error") else ''}
+          </div>
+          <div class="detail-item">
+            <div class="info-label">统计范围</div>
+            <div class="info-value">{esc(traffic_pool_text(item))}</div>
+            <div class="text-secondary small">CDT 明细匹配 {esc(match_line)}</div>
+          </div>
+          <div class="detail-item">
+            <div class="info-label">BSS 账期接口</div>
+            <div class="info-value">{esc(plan.get('reset_source_label') or item.get('billing_cycle_source_label') or '未知')}</div>
+            <div class="text-secondary small">账期 {esc(plan.get('billing_cycle') or item.get('billing_cycle') or '未知')}</div>
+            <div class="text-secondary small">{esc(plan.get('billing_region_id') or item.get('billing_region_id') or '')} {esc(plan.get('billing_endpoint') or item.get('billing_endpoint') or '')}</div>
+          </div>
+          <div class="detail-item">
+            <div class="info-label">API RequestId</div>
+            <div class="text-secondary small text-break">CDT：{esc(item.get('traffic_request_id') or '暂无')}</div>
+            <div class="text-secondary small text-break">BSS：{esc(plan.get('billing_request_id') or item.get('billing_request_id') or '暂无')}</div>
+          </div>
+          <div class="detail-item">
+            <div class="info-label">服务器 IP</div>
+            <div class="ip-main">{esc(identity['primary_ip'])}</div>
+            {small_line("公网 ", ", ".join(identity["public_ips"]))}
+            {small_line("内网 ", ", ".join(identity["private_ips"]))}
+          </div>
+          <div class="detail-item">
+            <div class="info-label">实例与区域</div>
+            <div class="text-secondary small text-break">{esc(item.get('instance_id'))}</div>
+            <div class="text-secondary small">ECS {esc(item.get('region_id'))} · CDT {esc(item.get('traffic_region_id'))}</div>
+            <div class="text-secondary small">最近检查 {esc(fmt_time(item.get('updated_at')))}</div>
+          </div>
+        </div>
+      </details>
+    """
 
 
 def render_server_row(item: dict, metadata: dict[str, dict], history: list[dict], active: bool = False) -> str:
@@ -2446,56 +2534,21 @@ def render_server_detail(item: dict, metadata: dict[str, dict], active: bool = F
           <button class="chart-trigger" type="button" data-chart-trigger data-server-id="{esc(identity['id'])}" data-chart-pool="{esc(item.get('traffic_pool_key') or '')}" data-server-name="{esc(identity['product_name'])}">查看 1天/3天/7天/1个月曲线</button>
         </div>
         <div class="detail-section">
-          <div class="info-label">预计恢复开机</div>
           {render_recovery_plan(item)}
         </div>
         <div class="detail-section">
           <div class="info-label">CDT 计费明细</div>
           {render_traffic_breakdown(item)}
         </div>
-        <div class="detail-section">
-          <div class="info-label">当前判断</div>
-          <div>{badge(item.get('action'))}</div>
-          <div class="text-secondary small mt-2">{esc(item.get('reason'))}</div>
-          {f'<div class="text-danger small mt-1">{esc(manual_note)}</div>' if manual_note else ''}
-          {f'<div class="text-danger small mt-1">{esc(item.get("last_error"))}</div>' if item.get("last_error") else ''}
-        </div>
-        <div class="detail-section">
-          <div class="info-label">电源控制</div>
-          {power_controls(identity['id'], item.get('instance_status'))}
-        </div>
-        <div class="detail-section">
-          <div class="detail-grid">
-            <div class="detail-item">
-              <div class="info-label">服务器 IP</div>
-              <div class="ip-main">{esc(identity['primary_ip'])}</div>
-              {small_line("公网 ", ", ".join(identity["public_ips"]))}
-              {small_line("内网 ", ", ".join(identity["private_ips"]))}
-            </div>
-            <div class="detail-item">
-              <div class="info-label">区域</div>
-              <div class="info-value">{esc(item.get('region_id'))}</div>
-              <div class="text-secondary small">CDT {esc(item.get('traffic_region_id'))}</div>
-            </div>
-            <div class="detail-item">
-              <div class="info-label">CDT 流量池</div>
-              <div class="info-value">{esc(item.get('traffic_pool_id') or '默认池')}</div>
-              <div class="text-secondary small">{esc(item.get('traffic_scope_label') or traffic_scope_label(item.get('traffic_scope')))}</div>
-              <div class="text-secondary small">池内启用机器 {esc(item.get('traffic_pool_member_count') or 0)} 台</div>
-            </div>
-            <div class="detail-item">
-              <div class="info-label">保护阈值</div>
-              <div class="info-value">预警 {fmt_gb(item.get('warning_threshold_gb'))}</div>
-              <div class="text-secondary small">恢复启动 {fmt_gb(item.get('start_threshold_gb'))}</div>
-            </div>
-            <div class="detail-item">
-              <div class="info-label">最近检查</div>
-              <div class="info-value">{esc(fmt_time(item.get('updated_at')))}</div>
-            </div>
+        <details class="detail-section detail-disclosure">
+          <summary>操作与电源控制</summary>
+          <div class="mt-3">
+            {power_controls(identity['id'], item.get('instance_status'))}
           </div>
-        </div>
-        <details class="detail-section">
-          <summary class="info-label">登录、实例 ID 与备注</summary>
+        </details>
+        {render_diagnostics(item, identity, manual_note)}
+        <details class="detail-section detail-disclosure">
+          <summary>登录、账号与备注</summary>
           <div class="detail-grid mt-3">
             <div class="detail-item">
               <div class="info-label">登录网站</div>
@@ -2507,10 +2560,6 @@ def render_server_detail(item: dict, metadata: dict[str, dict], active: bool = F
               <div class="info-label">SSH 备注</div>
               {small_line("SSH ", ssh_text)}
               {secret_button(ssh_password, "显示 SSH 密码") if ssh_password else '<div class="text-secondary small">SSH 密码未填写</div>'}
-            </div>
-            <div class="detail-item">
-              <div class="info-label">实例 ID</div>
-              <div class="text-secondary small text-break">{esc(item.get('instance_id'))}</div>
             </div>
             <div class="detail-item">
               <div class="info-label">备注</div>
