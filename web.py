@@ -163,24 +163,54 @@ def secret_button(value, label: str = "显示密码") -> str:
     )
 
 
+def status_view(status: str | None) -> tuple[str, str, str]:
+    mapping = {
+        "Running": ("running", "运行中", "Running"),
+        "Stopped": ("stopped", "已关机", "Stopped"),
+        "Starting": ("pending", "开机中", "Starting"),
+        "Stopping": ("pending", "关机中", "Stopping"),
+        "Disabled": ("muted", "已禁用", "Disabled"),
+    }
+    return mapping.get(status or "", ("muted", status or "未知", status or "Unknown"))
+
+
 def power_controls(server_id: str, status: str | None) -> str:
     status = status or ""
-    can_start = status in {"Stopped"}
-    can_stop = status in {"Running"}
-    start_disabled = "" if can_start else " disabled"
-    stop_disabled = "" if can_stop else " disabled"
+    if status == "Running":
+        return f"""
+          <div class="power-panel power-running">
+            <div>
+              <div class="power-title">当前正在运行</div>
+              <div class="power-copy">关机后会暂停自动启动，避免定时检查马上重新开机。</div>
+            </div>
+            <form method="post" action="/servers/power" onsubmit="return confirm('确认关机这台服务器？关机后会暂停自动启动，避免被定时任务重新开机。')">
+              <input type="hidden" name="id" value="{esc(server_id)}">
+              <input type="hidden" name="action" value="stop">
+              <button class="btn btn-danger power-main-btn" type="submit">关机并暂停自动启动</button>
+            </form>
+          </div>
+        """
+    if status == "Stopped":
+        return f"""
+          <div class="power-panel power-stopped">
+            <div>
+              <div class="power-title">当前已关机</div>
+              <div class="power-copy">开机后会恢复自动保护，后续仍按流量阈值巡检。</div>
+            </div>
+            <form method="post" action="/servers/power" onsubmit="return confirm('确认开机这台服务器？开机后会恢复自动保护。')">
+              <input type="hidden" name="id" value="{esc(server_id)}">
+              <input type="hidden" name="action" value="start">
+              <button class="btn btn-primary power-main-btn" type="submit">开机并恢复自动保护</button>
+            </form>
+          </div>
+        """
     return f"""
-      <div class="btn-list power-controls">
-        <form method="post" action="/servers/power" onsubmit="return confirm('确认开机这台服务器？开机后会恢复自动保护。')">
-          <input type="hidden" name="id" value="{esc(server_id)}">
-          <input type="hidden" name="action" value="start">
-          <button class="btn btn-sm btn-outline-primary" type="submit"{start_disabled}>开机</button>
-        </form>
-        <form method="post" action="/servers/power" onsubmit="return confirm('确认关机这台服务器？关机后会暂停自动启动，避免被定时任务重新开机。')">
-          <input type="hidden" name="id" value="{esc(server_id)}">
-          <input type="hidden" name="action" value="stop">
-          <button class="btn btn-sm btn-outline-danger" type="submit"{stop_disabled}>关机</button>
-        </form>
+      <div class="power-panel power-muted">
+        <div>
+          <div class="power-title">当前状态：{esc(status or "未知")}</div>
+          <div class="power-copy">实例处于过渡或未知状态，暂不提供电源操作。</div>
+        </div>
+        <button class="btn power-main-btn" type="button" disabled>等待状态更新</button>
       </div>
     """
 
@@ -410,10 +440,115 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       border-color: var(--accent);
       box-shadow: 0 8px 18px rgba(23, 99, 209, 0.18);
     }}
-    .note-cell {{ min-width: 240px; max-width: 340px; white-space: pre-wrap; }}
+    .server-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
+      gap: 18px;
+      padding: 18px;
+    }}
+    .server-card {{
+      overflow: hidden;
+    }}
+    .server-card-head {{
+      align-items: flex-start;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      gap: 18px;
+      justify-content: space-between;
+      padding: 20px 22px;
+    }}
+    .server-state {{
+      align-items: center;
+      border-radius: 999px;
+      display: inline-flex;
+      gap: 8px;
+      padding: 7px 12px;
+      white-space: nowrap;
+    }}
+    .server-state-dot {{
+      border-radius: 999px;
+      display: block;
+      height: 9px;
+      width: 9px;
+    }}
+    .server-state.running {{ background: var(--success-soft); color: #148341; }}
+    .server-state.running .server-state-dot {{ background: #22c55e; box-shadow: 0 0 0 4px rgba(34, 197, 94, .12); }}
+    .server-state.stopped {{ background: var(--danger-soft); color: #c92a2a; }}
+    .server-state.stopped .server-state-dot {{ background: #ef4444; box-shadow: 0 0 0 4px rgba(239, 68, 68, .12); }}
+    .server-state.pending {{ background: var(--warning-soft); color: #b7791f; }}
+    .server-state.pending .server-state-dot {{ background: #f59f00; box-shadow: 0 0 0 4px rgba(245, 159, 0, .14); }}
+    .server-state.muted {{ background: #eef2f6; color: #64748b; }}
+    .server-state.muted .server-state-dot {{ background: #94a3b8; }}
+    .server-state-main {{ font-weight: 760; line-height: 1; }}
+    .server-state-sub {{ color: currentColor; display: block; font-size: 11px; opacity: .75; }}
+    .server-card-body {{
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      padding: 18px 22px 22px;
+    }}
+    .info-block {{
+      background: #fbfcfe;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-height: 92px;
+      padding: 14px 15px;
+    }}
+    .info-block.span-3 {{ grid-column: span 3; }}
+    .info-block.span-4 {{ grid-column: span 4; }}
+    .info-block.span-5 {{ grid-column: span 5; }}
+    .info-block.span-6 {{ grid-column: span 6; }}
+    .info-block.span-7 {{ grid-column: span 7; }}
+    .info-block.span-12 {{ grid-column: 1 / -1; }}
+    .info-label {{
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 720;
+      margin-bottom: 8px;
+    }}
+    .info-value {{
+      color: #111827;
+      font-size: 15px;
+      font-weight: 650;
+      line-height: 1.45;
+    }}
+    .note-cell {{ white-space: pre-wrap; }}
+    .traffic-row {{
+      align-items: center;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) auto;
+    }}
+    .traffic-value {{
+      color: #111827;
+      font-size: 18px;
+      font-weight: 720;
+    }}
     .btn-list form {{ display: inline-block; margin: 0; }}
-    .power-controls {{ min-width: 118px; }}
-    .power-controls .btn {{ min-width: 52px; }}
+    .power-panel {{
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: flex;
+      gap: 14px;
+      justify-content: space-between;
+      padding: 14px 15px;
+    }}
+    .power-running {{ background: #fffafa; border-color: #ffd5d5; }}
+    .power-stopped {{ background: #f6f9ff; border-color: #cfe0ff; }}
+    .power-muted {{ background: #f8fafc; }}
+    .power-title {{
+      color: #111827;
+      font-weight: 760;
+      margin-bottom: 3px;
+    }}
+    .power-copy {{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      max-width: 420px;
+    }}
+    .power-main-btn {{ min-width: 168px; }}
     .form-control, .form-select {{
       border-color: var(--line-strong);
       border-radius: 8px;
@@ -435,7 +570,10 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     @media (max-width: 992px) {{
       .navbar-vertical {{ width: 100%; }}
       .container-xl {{ padding-left: 16px; padding-right: 16px; }}
-      .credential-grid, .log-layout, .log-meta {{ grid-template-columns: 1fr; }}
+      .credential-grid, .log-layout, .log-meta, .server-grid {{ grid-template-columns: 1fr; }}
+      .server-card-body {{ grid-template-columns: 1fr; }}
+      .info-block.span-3, .info-block.span-4, .info-block.span-5, .info-block.span-6, .info-block.span-7 {{ grid-column: 1 / -1; }}
+      .server-card-head, .power-panel {{ align-items: flex-start; flex-direction: column; }}
       .table-responsive {{ min-height: 0; }}
     }}
   </style>
@@ -510,8 +648,8 @@ def render_summary_cards(summary: dict) -> str:
     """
 
 
-def render_asset_rows(instances: list[dict], metadata: dict[str, dict]) -> str:
-    rows = []
+def render_asset_cards(instances: list[dict], metadata: dict[str, dict]) -> str:
+    cards = []
     for item in instances:
         meta = metadata.get(str(item.get("id")), {})
         used_pct = item.get("used_pct")
@@ -535,64 +673,102 @@ def render_asset_rows(instances: list[dict], metadata: dict[str, dict]) -> str:
         if meta.get("ssh_user") or meta.get("ssh_port"):
             ssh_text = f"{meta.get('ssh_user', 'root')}@{primary_ip}:{meta.get('ssh_port', 22)}"
         note_text = first_value(meta.get("notes"), meta.get("remark"), meta.get("account_note"))
-        rows.append(
+        state_class, state_label, state_sub = status_view(item.get("instance_status"))
+        manual_note = "手动关机保持中" if item.get("manual_stop") else ""
+        cards.append(
             f"""
-            <tr>
-              <td>
-                <div class="asset-name">{esc(product_name)}</div>
-                <div class="asset-sub">{esc(asset_label)}</div>
-                <div class="asset-sub">{esc(provider)} · {esc(item.get('instance_name') or '未识别 ECS 名')}</div>
-              </td>
-              <td>
-                <div class="ip-main">{esc(primary_ip)}</div>
-                {small_line("公网 ", ", ".join(public_ips))}
-                {small_line("内网 ", ", ".join(private_ips))}
-              </td>
-              <td>
-                <div>{esc(item.get('region_id'))}</div>
-                <div class="text-secondary small">{esc(item.get('traffic_region_id'))}</div>
-                <div class="text-secondary small">{esc(item.get('instance_id'))}</div>
-              </td>
-              <td>{badge(item.get('action'))}<div class="mt-1">{esc(item.get('instance_status'))}</div></td>
-              <td>
-                <div class="progress progress-sm">
-                  <div class="progress-bar {progress}" style="width:{pct:.2f}%"></div>
+            <article class="card server-card">
+              <div class="server-card-head">
+                <div>
+                  <div class="asset-name">{esc(product_name)}</div>
+                  <div class="asset-sub">{esc(asset_label)}</div>
+                  <div class="asset-sub">{esc(provider)} · {esc(item.get('instance_name') or '未识别 ECS 名')}</div>
                 </div>
-                <div class="text-secondary small mt-1">{fmt_gb(item.get('traffic_gb'))} / {fmt_gb(item.get('stop_threshold_gb'))}</div>
-              </td>
-              <td>
-                <div>{fmt_gb(item.get('remaining_gb'))}</div>
-                <div class="text-secondary small">预警 {fmt_gb(item.get('warning_threshold_gb'))}</div>
-                <div class="text-secondary small">启动 {fmt_gb(item.get('start_threshold_gb'))}</div>
-              </td>
-              <td>
-                <div>{link_or_text(meta.get('panel_url') or meta.get('login_url') or meta.get('website'))}</div>
-                {small_line("账号 ", panel_username)}
-                {secret_button(panel_password, "显示面板密码")}
-                {small_line("SSH ", ssh_text)}
-                {secret_button(ssh_password, "显示 SSH 密码") if ssh_password else ""}
-              </td>
-              <td class="note-cell">{esc(note_text) if note_text else '<span class="text-secondary">未填写</span>'}</td>
-              <td>{power_controls(str(item.get('id')), item.get('instance_status'))}</td>
-              <td>
-                <div>{esc(item.get('reason'))}</div>
-                <div class="text-secondary small">{esc(item.get('updated_at'))}</div>
-                <div class="btn-list mt-2">
-                  <a class="btn btn-sm" href="/servers/edit?id={esc(item.get('id'))}">编辑</a>
-                  <form method="post" action="/servers/delete" onsubmit="return confirm('确认删除这台服务器？')">
-                    <input type="hidden" name="id" value="{esc(item.get('id'))}">
-                    <button class="btn btn-sm btn-outline-danger" type="submit">删除</button>
-                  </form>
+                <div class="server-state {state_class}">
+                  <span class="server-state-dot"></span>
+                  <div>
+                    <div class="server-state-main">{esc(state_label)}</div>
+                    <div class="server-state-sub">{esc(state_sub)}</div>
+                  </div>
                 </div>
-              </td>
-            </tr>
+              </div>
+              <div class="server-card-body">
+                <section class="info-block span-4">
+                  <div class="info-label">服务器 IP</div>
+                  <div class="ip-main">{esc(primary_ip)}</div>
+                  {small_line("公网 ", ", ".join(public_ips))}
+                  {small_line("内网 ", ", ".join(private_ips))}
+                </section>
+                <section class="info-block span-4">
+                  <div class="info-label">阿里云信息</div>
+                  <div class="info-value">{esc(item.get('region_id'))}</div>
+                  <div class="text-secondary small">CDT {esc(item.get('traffic_region_id'))}</div>
+                  <div class="text-secondary small">{esc(item.get('instance_id'))}</div>
+                </section>
+                <section class="info-block span-4">
+                  <div class="info-label">当前判断</div>
+                  {badge(item.get('action'))}
+                  <div class="text-secondary small mt-2">{esc(item.get('reason'))}</div>
+                  {f'<div class="text-danger small mt-1">{esc(manual_note)}</div>' if manual_note else ''}
+                </section>
+                <section class="info-block span-6">
+                  <div class="traffic-row">
+                    <div>
+                      <div class="info-label">CDT 用量</div>
+                      <div class="traffic-value">{fmt_gb(item.get('traffic_gb'))}</div>
+                    </div>
+                    <div class="text-secondary small">上限 {fmt_gb(item.get('stop_threshold_gb'))}</div>
+                  </div>
+                  <div class="progress mt-3">
+                    <div class="progress-bar {progress}" style="width:{pct:.2f}%"></div>
+                  </div>
+                </section>
+                <section class="info-block span-6">
+                  <div class="info-label">保护阈值</div>
+                  <div class="info-value">剩余 {fmt_gb(item.get('remaining_gb'))}</div>
+                  <div class="text-secondary small">预警 {fmt_gb(item.get('warning_threshold_gb'))}</div>
+                  <div class="text-secondary small">恢复启动 {fmt_gb(item.get('start_threshold_gb'))}</div>
+                </section>
+                <section class="info-block span-6">
+                  <div class="info-label">登录信息</div>
+                  <div>{link_or_text(meta.get('panel_url') or meta.get('login_url') or meta.get('website'))}</div>
+                  {small_line("账号 ", panel_username)}
+                  {secret_button(panel_password, "显示面板密码")}
+                  {small_line("SSH ", ssh_text)}
+                  {secret_button(ssh_password, "显示 SSH 密码") if ssh_password else ""}
+                </section>
+                <section class="info-block span-6">
+                  <div class="info-label">备注</div>
+                  <div class="note-cell">{esc(note_text) if note_text else '<span class="text-secondary">未填写</span>'}</div>
+                </section>
+                <section class="info-block span-12">
+                  <div class="info-label">电源控制</div>
+                  {power_controls(str(item.get('id')), item.get('instance_status'))}
+                </section>
+                <section class="info-block span-12">
+                  <div class="asset-toolbar">
+                    <div>
+                      <div class="info-label">最近检查</div>
+                      <div class="info-value">{esc(item.get('updated_at'))}</div>
+                    </div>
+                    <div class="btn-list">
+                      <a class="btn btn-sm" href="/servers/edit?id={esc(item.get('id'))}">编辑</a>
+                      <form method="post" action="/servers/delete" onsubmit="return confirm('确认删除这台服务器？')">
+                        <input type="hidden" name="id" value="{esc(item.get('id'))}">
+                        <button class="btn btn-sm btn-outline-danger" type="submit">删除</button>
+                      </form>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </article>
             """
         )
-    return "".join(rows)
+    return "".join(cards)
 
 
 def render_assets_card(instances: list[dict], metadata: dict[str, dict]) -> str:
-    rows = render_asset_rows(instances, metadata)
+    cards = render_asset_cards(instances, metadata)
     return f"""
     <div class="card" id="servers">
       <div class="card-header">
@@ -605,15 +781,8 @@ def render_assets_card(instances: list[dict], metadata: dict[str, dict]) -> str:
           </div>
         </div>
       </div>
-      <div class="table-responsive">
-        <table class="table table-vcenter card-table">
-          <thead>
-            <tr>
-              <th>产品/机器</th><th>服务器 IP</th><th>阿里云信息</th><th>状态</th><th>CDT 用量</th><th>额度</th><th>登录信息</th><th>备注</th><th>电源</th><th>操作</th>
-            </tr>
-          </thead>
-          <tbody>{rows if rows else '<tr><td colspan="10" class="text-secondary">暂无服务器，请先新增。</td></tr>'}</tbody>
-        </table>
+      <div class="server-grid">
+        {cards if cards else '<div class="text-secondary">暂无服务器，请先新增。</div>'}
       </div>
     </div>
     """
