@@ -32,7 +32,7 @@ Aliyun CDT Guard 是一个自托管的阿里云 ECS / CDT 流量保护面板。
 - 支持服务器日志侧栏
 - 支持 Telegram Bot、Webhook、SMTP 邮件通知
 - 支持每日流量统计报告
-- 支持域名反代向导，生成 Cloudflare、Caddy、Nginx 配置
+- 支持域名反代向导，生成 Cloudflare、Caddy、Nginx 配置，并可一键应用 Caddy 反代
 - systemd timer 默认每分钟巡检一次
 - 无数据库，配置和历史写在本地 JSON / JSONL 文件
 
@@ -136,6 +136,13 @@ cdt.example.com {
   reverse_proxy 127.0.0.1:8787
 }
 ```
+
+也可以在面板左侧进入 `域名反代`：
+
+- 填写面板域名、源站公网 IP 和面板源站端口。
+- 先在 Cloudflare DNS 添加 A 记录，并确认服务器安全组放行 80/443。
+- 点击 `保存并应用 Caddy`，面板会在本机安装/写入/重启 Caddy。
+- 页面会显示域名解析状态和 Caddy 运行状态；如果 Cloudflare 开启橙色云，DNS 显示 Cloudflare IP 是正常现象。
 
 Nginx、Caddy、Cloudflare 和源站端口限制的详细说明见：
 

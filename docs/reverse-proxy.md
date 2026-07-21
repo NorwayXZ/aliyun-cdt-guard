@@ -20,6 +20,32 @@ https://cdt.example.com
 
 这样可以避免直接暴露 `IP:端口`，也方便接入 HTTPS、访问控制和 Cloudflare。
 
+## 面板一键应用 Caddy
+
+安装完成后，可以在面板左侧进入 `域名反代`。
+
+需要先准备：
+
+1. 在 Cloudflare DNS 添加 `A` 记录，指向安装面板的服务器公网 IP。
+2. 服务器安全组/防火墙放行 `80` 和 `443`。
+3. 面板仍能通过源站端口访问，例如 `http://服务器IP:8787`。
+
+然后在页面填写：
+
+- 面板域名：例如 `cdt.example.com`
+- 源站公网 IP：安装面板的服务器 IP
+- 面板源站端口：默认 `8787`
+
+点击 `保存并应用 Caddy` 后，面板会自动：
+
+- 安装 Caddy（如果本机还没有安装）
+- 备份 `/etc/caddy/Caddyfile`
+- 写入当前域名的反代配置
+- 重启 Caddy
+- 写入 `WEB_COOKIE_SECURE=true`
+
+Cloudflare 如果开启橙色云，DNS 查询结果会显示 Cloudflare 节点 IP，而不是源站 IP，这是正常现象。
+
 ## 方式一：Caddy 推荐
 
 Caddy 会自动申请和续期 HTTPS 证书，适合大多数用户。

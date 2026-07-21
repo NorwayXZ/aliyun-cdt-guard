@@ -7,6 +7,7 @@ import html
 import json
 import os
 import secrets
+import socket
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
@@ -492,6 +493,13 @@ def flash_message(code: str) -> str:
         "telegram_chat_saved": "Telegram Chat ID 已追加到已保存渠道",
         "telegram_chat_removed": "Telegram Chat ID 已移除",
         "domain_saved": "域名反代配置已保存，下面的配置片段已按新域名生成",
+        "domain_applied": "已应用 Caddy 反代配置，请稍后用 HTTPS 域名访问",
+        "domain_apply_domain_invalid": "域名格式不正确，请先填写类似 cdt.example.com 的完整域名",
+        "domain_apply_port_invalid": "源站端口不正确，请填写面板实际监听端口，例如 8787",
+        "domain_apply_install_failed": "安装 Caddy 失败，请检查服务器 apt 源和网络是否正常",
+        "domain_apply_write_failed": "写入 Caddy 配置失败，请确认面板以 root 权限运行",
+        "domain_apply_restart_failed": "Caddy 配置已写入，但重启失败，请检查域名 DNS 和 80/443 端口",
+        "domain_apply_failed": "应用 Caddy 反代失败，请检查域名 DNS 是否指向本机、公网 80/443 是否放行",
         "login_required": "请先登录",
         "login_failed": "用户名或密码不正确",
         "logged_out": "已退出登录",
@@ -1848,6 +1856,47 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       font-size: 12px;
       line-height: 1.55;
     }}
+    .proxy-status-card {{
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      margin-bottom: 16px;
+    }}
+    .proxy-status-item {{
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }}
+    .proxy-status-label {{
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 720;
+      margin-bottom: 8px;
+    }}
+    .proxy-status-value {{
+      color: #111827;
+      font-size: 14px;
+      font-weight: 760;
+      overflow-wrap: anywhere;
+    }}
+    .proxy-status-hint {{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      margin-top: 6px;
+    }}
+    .proxy-status-chip {{
+      border-radius: 999px;
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 760;
+      padding: 4px 9px;
+    }}
+    .proxy-status-chip.ok {{ background: var(--success-soft); color: #148341; }}
+    .proxy-status-chip.warn {{ background: var(--warning-soft); color: #b7791f; }}
+    .proxy-status-chip.danger {{ background: var(--danger-soft); color: #c92a2a; }}
+    .proxy-status-chip.muted {{ background: #eef2f6; color: #64748b; }}
     .config-block {{
       background: #0f172a;
       border-radius: 8px;
@@ -2267,7 +2316,9 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
           if (!form.checkValidity()) return;
           form.dataset.submitting = "1";
           form.classList.add("is-submitting");
-          const button = form.querySelector("[data-submit-button]");
+          const button = event.submitter && event.submitter.matches("[data-submit-button]")
+            ? event.submitter
+            : form.querySelector("[data-submit-button]");
           if (button) {{
             button.disabled = true;
             button.dataset.originalText = button.textContent;
@@ -3636,17 +3687,146 @@ def save_domain_proxy(fields: dict[str, list[str]]) -> None:
     write_json(DOMAIN_PROXY_FILE, config)
 
 
+def valid_domain(value: str) -> bool:
+    value = str(value or "").strip().lower()
+    if len(value) < 4 or len(value) > 253 or "." not in value:
+        return False
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-.")
+    if any(char not in allowed for char in value):
+        return False
+    return all(part and not part.startswith("-") and not part.endswith("-") for part in value.split("."))
+
+
+def resolve_domain_ips(domain: str) -> list[str]:
+    if not valid_domain(domain):
+        return []
+    try:
+        records = socket.getaddrinfo(domain, None, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return []
+    ips = sorted({str(record[4][0]) for record in records if record and record[4]})
+    return ips
+
+
+def proxy_status_chip(kind: str, text: str) -> str:
+    return f'<span class="proxy-status-chip {esc(kind)}">{esc(text)}</span>'
+
+
+def update_web_env(updates: dict[str, str]) -> None:
+    existing = []
+    seen = set()
+    if WEB_ENV_FILE.exists():
+        for raw_line in WEB_ENV_FILE.read_text(encoding="utf-8").splitlines():
+            if "=" in raw_line and not raw_line.lstrip().startswith("#"):
+                key = raw_line.split("=", 1)[0].strip()
+                if key in updates:
+                    existing.append(f"{key}={updates[key]}")
+                    seen.add(key)
+                    continue
+            existing.append(raw_line)
+    for key, value in updates.items():
+        if key not in seen:
+            existing.append(f"{key}={value}")
+    WEB_ENV_FILE.write_text("\n".join(existing).rstrip() + "\n", encoding="utf-8")
+    os.chmod(WEB_ENV_FILE, 0o600)
+
+
+def apply_caddy_proxy() -> tuple[bool, str]:
+    config = read_domain_proxy_config()
+    domain = str(config.get("domain") or "").strip().lower()
+    origin_port = str(config.get("origin_port") or "8787").strip()
+    if not valid_domain(domain):
+        return False, "domain_invalid"
+    if not origin_port.isdigit():
+        return False, "port_invalid"
+
+    install_script = """
+set -e
+if ! command -v caddy >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gpg
+  install -d -m 0755 /usr/share/keyrings
+  rm -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
+  apt-get update
+  apt-get install -y caddy
+fi
+"""
+    result = subprocess.run(["/bin/sh", "-lc", install_script], cwd=str(BASE_DIR), timeout=240, check=False)
+    if result.returncode != 0:
+        return False, "install_failed"
+
+    caddyfile = Path("/etc/caddy/Caddyfile")
+    try:
+        caddyfile.parent.mkdir(parents=True, exist_ok=True)
+        if caddyfile.exists():
+            backup = caddyfile.with_name(f"Caddyfile.bak.{int(time.time())}")
+            backup.write_text(caddyfile.read_text(encoding="utf-8"), encoding="utf-8")
+        caddyfile.write_text(
+            f"{domain} {{\n  reverse_proxy 127.0.0.1:{origin_port}\n}}\n",
+            encoding="utf-8",
+        )
+        update_web_env({"WEB_COOKIE_SECURE": "true"})
+    except Exception:
+        return False, "write_failed"
+
+    reload_result = subprocess.run(["systemctl", "restart", "caddy"], timeout=60, check=False)
+    if reload_result.returncode != 0:
+        return False, "restart_failed"
+    return True, "ok"
+
+
 def render_code_block(text: str) -> str:
     return f'<pre class="config-block"><code>{esc(text.strip())}</code></pre>'
+
+
+def command_exists(command: str) -> bool:
+    return subprocess.run(["/bin/sh", "-lc", f"command -v {command} >/dev/null 2>&1"], check=False).returncode == 0
+
+
+def service_state(service: str) -> str:
+    try:
+        result = subprocess.run(["systemctl", "is-active", service], capture_output=True, text=True, check=False)
+        return result.stdout.strip() or "unknown"
+    except OSError:
+        return "unknown"
 
 
 def render_domain_page(query: dict[str, list[str]] | None = None) -> bytes:
     query = query or {}
     config = read_domain_proxy_config()
-    domain = str(config.get("domain") or "cdt.example.com")
-    origin_ip = str(config.get("origin_ip") or "你的服务器公网 IP")
+    saved_domain = str(config.get("domain") or "").strip().lower()
+    saved_origin_ip = str(config.get("origin_ip") or "").strip()
+    domain = saved_domain or "cdt.example.com"
+    origin_ip = saved_origin_ip or "你的服务器公网 IP"
     origin_port = str(config.get("origin_port") or "8787")
     proxy_type = str(config.get("proxy_type") or "caddy")
+    cloudflare_proxy = bool(config.get("cloudflare_proxy", True))
+    caddy_installed = command_exists("caddy")
+    caddy_state = service_state("caddy") if caddy_installed else "未安装"
+    resolved_ips = resolve_domain_ips(saved_domain)
+    if not saved_domain:
+        dns_chip = proxy_status_chip("muted", "未填写域名")
+        dns_hint = "先填写你准备使用的面板域名，例如 cdt.example.com。"
+    elif not resolved_ips:
+        dns_chip = proxy_status_chip("warn", "未解析到记录")
+        dns_hint = "请先在 Cloudflare DNS 添加 A 记录，或者等待 DNS 生效。"
+    elif cloudflare_proxy:
+        dns_chip = proxy_status_chip("ok", "已解析")
+        dns_hint = "已开启 Cloudflare 代理时，解析会显示 Cloudflare 节点 IP，不会显示源站 IP，这是正常的。当前解析：" + ", ".join(resolved_ips)
+    elif saved_origin_ip and saved_origin_ip in resolved_ips:
+        dns_chip = proxy_status_chip("ok", "已指向本机")
+        dns_hint = "当前解析结果：" + ", ".join(resolved_ips)
+    else:
+        dns_chip = proxy_status_chip("danger", "未指向源站 IP")
+        dns_hint = "当前解析结果：" + ", ".join(resolved_ips)
+    if caddy_installed and caddy_state == "active":
+        caddy_chip = proxy_status_chip("ok", "Caddy 运行中")
+    elif caddy_installed:
+        caddy_chip = proxy_status_chip("warn", f"Caddy {caddy_state}")
+    else:
+        caddy_chip = proxy_status_chip("muted", "未安装 Caddy")
     dns_name = domain.split(".", 1)[0] if "." in domain else domain
     caddy_config = f"""
 {domain} {{
@@ -3669,14 +3849,37 @@ server {{
 """
     env_config = "WEB_COOKIE_SECURE=true"
     body = f"""
+    <div class="card mb-3">
+      <div class="card-header"><h3 class="card-title">当前反代状态</h3></div>
+      <div class="card-body">
+        <div class="proxy-status-card">
+          <div class="proxy-status-item">
+            <div class="proxy-status-label">域名解析</div>
+            <div class="proxy-status-value">{dns_chip}</div>
+            <div class="proxy-status-hint">{esc(dns_hint)}</div>
+          </div>
+          <div class="proxy-status-item">
+            <div class="proxy-status-label">本机 Caddy</div>
+            <div class="proxy-status-value">{caddy_chip}</div>
+            <div class="proxy-status-hint">点击“保存并应用 Caddy”后，面板会自动安装/写入/重启 Caddy。</div>
+          </div>
+          <div class="proxy-status-item">
+            <div class="proxy-status-label">最终访问地址</div>
+            <div class="proxy-status-value">https://{esc(domain)}</div>
+            <div class="proxy-status-hint">DNS 指向本机且 80/443 放行后，用这个地址登录面板。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="proxy-grid">
-      <form class="card save-form" method="post" action="/domain/save" data-save-form>
+      <form id="domain-config-form" class="card save-form" method="post" action="/domain/save" data-save-form>
         <div class="card-header">
           <h3 class="card-title">绑定域名 / 反代向导</h3>
         </div>
         <div class="card-body">
           <div class="setup-box">
-            保存域名信息后，下面会自动生成 Cloudflare DNS、Caddy、Nginx 和 web.env 配置。这里不会自动修改 Cloudflare，避免误动你的 DNS。
+            先填域名和源站 IP。只点“保存配置”会生成教程和配置片段；点“保存并应用 Caddy”会直接在这台服务器安装/写入 Caddy 反代。Cloudflare DNS 仍需你自己添加，避免误动你的 DNS。
           </div>
           <div class="credential-grid">
             {input_field("domain", "面板域名", config.get("domain", ""), placeholder="例如：cdt.example.com", hint="在 Cloudflare DNS 里添加这个子域名。")}
@@ -3690,7 +3893,8 @@ server {{
         </div>
         <div class="card-footer d-flex align-items-center gap-2">
           <div class="submit-feedback"><span class="spinner-dot"></span><span>正在保存域名配置...</span></div>
-          <button class="btn btn-primary btn-submit ms-auto" type="submit" data-submit-button data-loading-text="正在保存...">保存域名配置</button>
+          <button class="btn btn-submit ms-auto" type="submit" data-submit-button data-loading-text="正在保存...">保存配置</button>
+          <button class="btn btn-primary btn-submit" type="submit" formaction="/domain/apply" data-submit-button data-loading-text="正在应用..." onclick="return confirm('确认在本机安装/重启 Caddy 并写入反代配置？请先确认 DNS 已指向本机，80/443 已放行。')">保存并应用 Caddy</button>
         </div>
       </form>
 
@@ -3745,8 +3949,29 @@ server {{
         {render_code_block(env_config)}
 
         <div class="status-note mt-3">
-          这一页先做配置向导，不自动改 DNS。以后如果你愿意提供 Cloudflare API Token，可以再加“一键创建 DNS 记录”。
+          Cloudflare DNS 需要你手动添加。以后如果你愿意提供 Cloudflare API Token，可以再加“一键创建 DNS 记录”。
         </div>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header"><h3 class="card-title">一键应用到本机 Caddy</h3></div>
+      <div class="card-body">
+        <div class="proxy-step-grid">
+          <div class="proxy-step-card">
+            <strong>Caddy 状态</strong>
+            <span>{'已安装' if caddy_installed else '未安装'} · {esc(caddy_state)}</span>
+          </div>
+          <div class="proxy-step-card">
+            <strong>会执行什么</strong>
+            <span>安装 Caddy、备份 /etc/caddy/Caddyfile、写入当前域名反代、重启 Caddy，并把 web.env 设置为 WEB_COOKIE_SECURE=true。</span>
+          </div>
+          <div class="proxy-step-card">
+            <strong>前置条件</strong>
+            <span>Cloudflare DNS 已把 {esc(domain)} 指向 {esc(origin_ip)}，服务器安全组/防火墙放行 80 和 443。</span>
+          </div>
+        </div>
+        <button class="btn btn-primary mt-3" type="submit" form="domain-config-form" formaction="/domain/apply" onclick="return confirm('确认在本机安装/重启 Caddy 并写入反代配置？请先确认 DNS 已指向本机，80/443 已放行。')">保存并应用 Caddy</button>
       </div>
     </div>
     """
@@ -4306,6 +4531,12 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/domain/save":
             save_domain_proxy(fields)
             self.redirect("/domain?flash=domain_saved")
+            return
+        if parsed.path == "/domain/apply":
+            save_domain_proxy(fields)
+            ok, reason = apply_caddy_proxy()
+            flash = "domain_applied" if ok else f"domain_apply_{reason}"
+            self.redirect(f"/domain?flash={flash}")
             return
         if parsed.path == "/notifications/test":
             result = notifications.send_test_message()
