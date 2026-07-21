@@ -183,6 +183,19 @@ def query_account_balance_info(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def reset_countdown_label(seconds: int) -> str:
+    if seconds <= 0:
+        return "已到重置时间"
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    minutes = (seconds % 3600) // 60
+    if days:
+        return f"{days}天{hours}小时" if hours else f"{days}天"
+    if hours:
+        return f"{hours}小时{minutes}分钟" if minutes else f"{hours}小时"
+    return f"{max(1, minutes)}分钟"
+
+
 def recovery_plan(
     item: dict[str, Any],
     traffic_gb: float | None,
@@ -217,6 +230,7 @@ def recovery_plan(
         "next_reset_at": reset_at.isoformat(timespec="seconds"),
         "days_until_reset": days,
         "seconds_until_reset": seconds,
+        "reset_countdown_label": reset_countdown_label(seconds),
         "reset_source": reset_source,
         "reset_source_label": reset_source_label,
         "billing_cycle": billing_info.get("billing_cycle"),

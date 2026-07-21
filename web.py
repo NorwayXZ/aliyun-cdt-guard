@@ -258,7 +258,7 @@ def render_recovery_plan(item: dict) -> str:
     plan = item.get("recovery_plan") or {}
     if not plan:
         return '<div class="text-secondary small">暂无恢复时间信息，下一次巡检后会显示。</div>'
-    days = plan.get("days_until_reset")
+    countdown_label = plan.get("reset_countdown_label") or f"{plan.get('days_until_reset', '未知')}天"
     will_auto_start = bool(plan.get("will_auto_start_after_reset"))
     paused = bool(plan.get("auto_start_paused"))
     status_text = "会自动开机" if will_auto_start else ("手动关机保持中" if paused else "未处于自动恢复队列")
@@ -277,8 +277,8 @@ def render_recovery_plan(item: dict) -> str:
           <div class="text-secondary small">{esc(reset_hint)}</div>
         </div>
         <div class="reset-count">
-          <div class="recovery-days">{esc(days)}</div>
-          <div class="recovery-unit">天后重置</div>
+          <div class="reset-duration">{esc(countdown_label)}</div>
+          <div class="recovery-unit">后重置</div>
         </div>
       </div>
       <div class="reset-foot">
@@ -1447,6 +1447,13 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       font-size: 24px;
       font-weight: 760;
       line-height: 1;
+    }}
+    .reset-duration {{
+      color: #111827;
+      font-size: 18px;
+      font-weight: 760;
+      line-height: 1.15;
+      overflow-wrap: anywhere;
     }}
     .recovery-unit {{
       color: var(--muted);

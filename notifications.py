@@ -443,13 +443,14 @@ def build_traffic_reply(status: dict[str, Any]) -> str:
     lines = ["每台机器流量", ""]
     for item in status.get("instances", []):
         plan = item.get("recovery_plan") or {}
+        countdown = plan.get("reset_countdown_label") or f"{plan.get('days_until_reset', '未知')} 天"
         lines.append(
             f"- {item.get('label') or item.get('id')}\n"
             f"  状态：{item.get('instance_status') or '未知'}\n"
             f"  CDT：{gb(item.get('traffic_gb'))} / {gb(item.get('stop_threshold_gb'))}\n"
             f"  本次新增：{gb(item.get('traffic_delta_gb'))}\n"
             f"  流量池：{item.get('traffic_pool_label') or '未知'}\n"
-            f"  下次重置：{str(plan.get('next_reset_at') or '暂无').split('T')[0]}，约 {plan.get('days_until_reset', '未知')} 天"
+            f"  下次重置：{str(plan.get('next_reset_at') or '暂无').split('T')[0]}，剩余 {countdown}"
         )
     return "\n".join(lines).strip()
 
@@ -487,6 +488,7 @@ def build_server_reply(status: dict[str, Any], keyword: str) -> str:
         if keyword not in haystack:
             continue
         plan = item.get("recovery_plan") or {}
+        countdown = plan.get("reset_countdown_label") or f"{plan.get('days_until_reset', '未知')} 天"
         return (
             f"{item.get('label') or item.get('id')}\n\n"
             f"状态：{item.get('instance_status') or '未知'}\n"
@@ -498,7 +500,7 @@ def build_server_reply(status: dict[str, Any], keyword: str) -> str:
             f"动作：{action_label(item.get('action'))}\n"
             f"原因：{item.get('reason') or '无'}\n"
             f"流量池：{item.get('traffic_pool_label') or '未知'}\n"
-            f"预计重置：{str(plan.get('next_reset_at') or '暂无').split('T')[0]}，约 {plan.get('days_until_reset', '未知')} 天"
+            f"预计重置：{str(plan.get('next_reset_at') or '暂无').split('T')[0]}，剩余 {countdown}"
         )
     return f"没有找到匹配服务器：{keyword}"
 
