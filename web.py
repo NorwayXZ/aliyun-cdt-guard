@@ -3471,8 +3471,8 @@ def render_form_guide() -> str:
           <span>默认预警 160GB、停机 180GB、恢复 175GB；以后可以按自己的账号额度再微调。</span>
         </div>
         <div class="guide-step">
-          <strong>6. 共享池放高级设置</strong>
-          <span>如果多台机器共用同一个 CDT 额度，再展开“高级设置”选择共享池和流量池 ID。</span>
+          <strong>6. 共享池不用去阿里云找 ID</strong>
+          <span>“流量池分组名”是面板内部分组：同一阿里云账号共享 CDT 额度时，选择共享池即可；留空会按 AccessKey 自动归组。</span>
         </div>
         <div class="guide-step">
           <strong>7. 账期优先走 BSS</strong>
@@ -3552,7 +3552,7 @@ def render_form(item: dict) -> str:
                 (TRAFFIC_SCOPE_ACCOUNT_NON_CHINA, "账号非中国内地共享池"),
                 (TRAFFIC_SCOPE_ACCOUNT_ALL, "账号全部 CDT 流量"),
             ], "香港、日本、新加坡等机器共享同一账号额度时，建议选“账号非中国内地共享池”。")}
-            {input_field("traffic_pool_id", "流量池 ID", item.get("traffic_pool_id", ""), placeholder="例如：global-200g 或 hk-account-pool", hint="同一账号共享额度的机器填同一个 ID；留空会自动生成默认池。")}
+            {input_field("traffic_pool_id", "流量池分组名（可选）", item.get("traffic_pool_id", ""), placeholder="可留空；例如：global-200g", hint="这不是阿里云提供的 ID，而是面板内部自定义分组名。同一组机器填同一个；留空会按 AccessKey 和统计方式自动归组。")}
           </div>
         </details>
         <details class="form-section detail-disclosure"{advanced_open}>
