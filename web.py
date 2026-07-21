@@ -410,6 +410,8 @@ def render_form(item: dict) -> str:
     is_edit = bool(item)
     title = "编辑服务器" if is_edit else "新增服务器"
     id_value = item.get("id", "")
+    global_env = load_env(BASE_DIR / "guard.env")
+    access_key_id = first_value(item.get("access_key_id"), global_env.get("ALIYUN_ACCESS_KEY_ID"))
     secret_hint = "编辑时留空则保留原 Secret" if is_edit else ""
     panel_password_hint = "编辑时留空则保留原密码" if is_edit else ""
     return f"""
@@ -431,7 +433,7 @@ def render_form(item: dict) -> str:
           {input_field("traffic_region_id", "CDT 流量区域", item.get("traffic_region_id", item.get("region_id", "cn-hongkong")), placeholder="cn-hongkong")}
         </div>
         <div class="credential-grid">
-          {input_field("access_key_id", "阿里云 AccessKey ID", item.get("access_key_id", ""), required=True)}
+          {input_field("access_key_id", "阿里云 AccessKey ID", access_key_id, required=True)}
           {input_field("access_key_secret", "阿里云 AccessKey Secret", "", "password", hint=secret_hint, required=not is_edit)}
         </div>
         <div class="credential-grid">
