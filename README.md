@@ -146,7 +146,7 @@ Nginx、Caddy、Cloudflare 和源站端口限制的详细说明见：
 - 产品自定义名字
 - 服务器 IP
 - ECS Instance ID
-- 阿里云区域 ID，例如 `cn-hongkong`
+- 阿里云区域 ID，例如 `cn-hongkong`。面板支持常见地域下拉提示，也可以查看阿里云官方“地域和可用区”文档确认。
 - CDT 流量区域，例如 `cn-hongkong`
 - 阿里云 AccessKey ID
 - 阿里云 AccessKey Secret
@@ -157,6 +157,12 @@ Nginx、Caddy、Cloudflare 和源站端口限制的详细说明见：
 - 恢复启动阈值
 - CDT 每月重置日
 - 登录网站、账号密码、SSH 备注、用途备注
+
+区域 ID 必须和 ECS 实例所在地域一致。阿里云官方地域表：
+
+```text
+https://help.aliyun.com/zh/ecs/user-guide/regions-and-zones
+```
 
 保存后面板会立即执行一次检查。
 

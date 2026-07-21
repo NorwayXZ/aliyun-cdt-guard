@@ -31,6 +31,39 @@ TRAFFIC_SCOPE_LABELS = {
     TRAFFIC_SCOPE_ACCOUNT_NON_CHINA: "账号非中国内地共享池",
     TRAFFIC_SCOPE_ACCOUNT_ALL: "账号全部 CDT 流量",
 }
+ALIYUN_REGION_DOC_URL = "https://help.aliyun.com/zh/ecs/user-guide/regions-and-zones"
+ALIYUN_REGION_OPTIONS = [
+    ("cn-hongkong", "中国香港"),
+    ("ap-northeast-1", "日本（东京）"),
+    ("ap-southeast-1", "新加坡"),
+    ("ap-southeast-3", "马来西亚（吉隆坡）"),
+    ("ap-southeast-5", "印度尼西亚（雅加达）"),
+    ("ap-southeast-6", "菲律宾（马尼拉）"),
+    ("ap-southeast-7", "泰国（曼谷）"),
+    ("ap-southeast-8", "马来西亚（柔佛州）"),
+    ("ap-south-1", "印度（孟买）"),
+    ("ap-northeast-2", "韩国（首尔）"),
+    ("eu-central-1", "德国（法兰克福）"),
+    ("eu-west-1", "英国（伦敦）"),
+    ("eu-west-2", "法国（巴黎）"),
+    ("us-east-1", "美国（弗吉尼亚）"),
+    ("us-west-1", "美国（硅谷）"),
+    ("me-east-1", "阿联酋（迪拜）"),
+    ("me-central-1", "沙特（利雅得）"),
+    ("na-south-1", "墨西哥"),
+    ("cn-hangzhou", "华东 1（杭州）"),
+    ("cn-shanghai", "华东 2（上海）"),
+    ("cn-qingdao", "华北 1（青岛）"),
+    ("cn-beijing", "华北 2（北京）"),
+    ("cn-zhangjiakou", "华北 3（张家口）"),
+    ("cn-huhehaote", "华北 5（呼和浩特）"),
+    ("cn-wulanchabu", "华北 6（乌兰察布）"),
+    ("cn-shenzhen", "华南 1（深圳）"),
+    ("cn-heyuan", "华南 2（河源）"),
+    ("cn-guangzhou", "华南 3（广州）"),
+    ("cn-chengdu", "西南 1（成都）"),
+    ("cn-zhongwei", "西北 2（中卫）"),
+]
 
 
 def load_env(path: Path) -> dict[str, str]:
@@ -908,6 +941,20 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       border-color: #f3b5b5;
       color: #b42323;
     }}
+    .form-label-row {{
+      align-items: center;
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+    }}
+    .form-doc-link {{
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      text-decoration: none;
+      white-space: nowrap;
+    }}
+    .form-doc-link:hover {{ text-decoration: underline; }}
     .ip-main {{
       color: #111827;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -3349,6 +3396,27 @@ def input_field(name: str, label: str, value="", field_type: str = "text", place
     )
 
 
+def region_field(name: str, label: str, value="", placeholder: str = "", hint: str = "", required: bool = False) -> str:
+    required_attr = " required" if required else ""
+    list_id = f"{name}-options"
+    hint_html = f'<div class="form-hint">{esc(hint)}</div>' if hint else ""
+    options = "".join(
+        f'<option value="{esc(region_id)}" label="{esc(region_name)}">{esc(region_name)} · {esc(region_id)}</option>'
+        for region_id, region_name in ALIYUN_REGION_OPTIONS
+    )
+    return f"""
+      <div class="mb-3">
+        <div class="form-label-row">
+          <label class="form-label mb-0">{esc(label)}</label>
+          <a class="form-doc-link" href="{esc(ALIYUN_REGION_DOC_URL)}" target="_blank" rel="noopener">查看官方地域 ID</a>
+        </div>
+        <input class="form-control mt-2" type="text" name="{esc(name)}" value="{esc(value)}" placeholder="{esc(placeholder)}" list="{esc(list_id)}"{required_attr}>
+        <datalist id="{esc(list_id)}">{options}</datalist>
+        {hint_html}
+      </div>
+    """
+
+
 def select_field(name: str, label: str, value: str, options: list[tuple[str, str]], hint: str = "") -> str:
     hint_html = f'<div class="form-hint">{esc(hint)}</div>' if hint else ""
     option_html = "".join(
@@ -3395,19 +3463,23 @@ def render_form_guide() -> str:
           <span>这里不会自动带入任何密钥。请填写这台服务器所属阿里云账号或 RAM 用户的 AccessKey ID 和 Secret。</span>
         </div>
         <div class="guide-step">
-          <strong>4. 阈值可先用默认</strong>
+          <strong>4. 区域 ID 要填准</strong>
+          <span>控制台常显示地域名称，官方“地域和可用区”文档会列出地域 ID；例如中国香港是 cn-hongkong，日本东京是 ap-northeast-1。</span>
+        </div>
+        <div class="guide-step">
+          <strong>5. 阈值可先用默认</strong>
           <span>默认预警 160GB、停机 180GB、恢复 175GB；以后可以按自己的账号额度再微调。</span>
         </div>
         <div class="guide-step">
-          <strong>5. 共享池放高级设置</strong>
+          <strong>6. 共享池放高级设置</strong>
           <span>如果多台机器共用同一个 CDT 额度，再展开“高级设置”选择共享池和流量池 ID。</span>
         </div>
         <div class="guide-step">
-          <strong>6. 账期优先走 BSS</strong>
+          <strong>7. 账期优先走 BSS</strong>
           <span>已授权 BSS 后，面板会用账单 API 判断真实账期；每月重置日只是备用推算。</span>
         </div>
         <div class="guide-step">
-          <strong>7. 保存后的反应</strong>
+          <strong>8. 保存后的反应</strong>
           <span>点击保存后会立即写入配置并做一次检查，按钮会进入等待状态，完成后回到总览页。</span>
         </div>
       </div>
@@ -3441,7 +3513,7 @@ def render_form(item: dict) -> str:
             {input_field("instance_id", "ECS Instance ID", item.get("instance_id", ""), placeholder="例如：i-j6ceg1880o7i5vxdpeq4", required=True)}
           </div>
           <div class="credential-grid">
-            {input_field("region_id", "区域 ID", item.get("region_id", "cn-hongkong"), placeholder="例如：cn-hongkong", required=True)}
+            {region_field("region_id", "区域 ID", item.get("region_id", "cn-hongkong"), placeholder="输入或选择，例如：cn-hongkong", hint="必须和 ECS 实例所在地域一致；填错会导致实例查询和开关机失败。", required=True)}
             {input_field("access_key_id", "阿里云 AccessKey ID", access_key_id, placeholder="粘贴 AccessKey ID", hint=access_key_hint, required=not is_edit)}
           </div>
           {input_field("access_key_secret", "阿里云 AccessKey Secret", "", "password", placeholder="粘贴 AccessKey Secret", hint=secret_hint or "只在保存时写入配置文件，页面不会回显。", required=not is_edit)}
@@ -3471,7 +3543,7 @@ def render_form(item: dict) -> str:
             {input_field("provider", "服务商", item.get("provider", "阿里云"))}
           </div>
           <div class="credential-grid">
-            {input_field("traffic_region_id", "CDT 流量区域", item.get("traffic_region_id", "") if is_edit else "", placeholder="默认跟随区域 ID，例如 cn-hongkong", hint="留空会自动跟随区域 ID；共享池模式下只用于备注和兼容旧配置。")}
+            {region_field("traffic_region_id", "CDT 流量区域", item.get("traffic_region_id", "") if is_edit else "", placeholder="留空默认跟随区域 ID，例如 cn-hongkong", hint="留空会自动跟随区域 ID；共享池模式下只用于备注和兼容旧配置。")}
             {input_field("traffic_reset_day", "CDT 每月重置日", item.get("traffic_reset_day", 1), "number", hint="BSS 账单 API 不可用时才作为备用推算。通常填 1。")}
           </div>
           <div class="credential-grid">
