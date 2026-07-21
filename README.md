@@ -39,6 +39,15 @@ Aliyun CDT Guard 是一个自托管的阿里云 ECS / CDT 流量保护面板。
 
 ## 一键安装
 
+推荐系统：
+
+```text
+Ubuntu 22.04 LTS
+Debian 12
+```
+
+其他基于 systemd 的 Linux 发行版可尝试安装，但项目优先保证 Ubuntu / Debian 的兼容性。公开部署或给新手使用时，建议优先选择 Ubuntu 22.04。
+
 在准备用作控制面板的 Linux 服务器上执行：
 
 ```bash
