@@ -201,6 +201,16 @@ def fmt_time(value) -> str:
     return text.replace("T", " ").replace("+00:00", " UTC")
 
 
+def fmt_date(value) -> str:
+    if not value:
+        return "暂无"
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.strftime("%Y-%m-%d")
+    except ValueError:
+        return str(value).split("T", 1)[0]
+
+
 def fmt_delta(value) -> str:
     if value is None:
         return "暂无变化数据"
@@ -229,6 +239,53 @@ def traffic_pool_badge(item: dict) -> str:
     if count > 1:
         return f"共享池 · {count} 台机器"
     return "账号池 · 单台机器"
+
+
+def recovery_status_badge(item: dict) -> str:
+    plan = item.get("recovery_plan") or {}
+    if plan.get("auto_start_paused"):
+        return "手动关机，不会自动恢复"
+    if plan.get("will_auto_start_after_reset"):
+        days = plan.get("days_until_reset")
+        return f"预计 {days} 天后自动开机"
+    if plan.get("stopped_by_threshold"):
+        return "等待账期重置"
+    return f"下次重置 {fmt_date(plan.get('next_reset_at'))}"
+
+
+def render_recovery_plan(item: dict) -> str:
+    plan = item.get("recovery_plan") or {}
+    if not plan:
+        return '<div class="text-secondary small">暂无恢复时间信息，下一次巡检后会显示。</div>'
+    days = plan.get("days_until_reset")
+    will_auto_start = bool(plan.get("will_auto_start_after_reset"))
+    paused = bool(plan.get("auto_start_paused"))
+    status_text = "会自动开机" if will_auto_start else ("手动关机保持中" if paused else "未处于自动恢复队列")
+    status_class = "recovery-ok" if will_auto_start else ("recovery-paused" if paused else "recovery-neutral")
+    return f"""
+      <div class="recovery-panel {status_class}">
+        <div>
+          <div class="recovery-title">{esc(status_text)}</div>
+          <div class="recovery-copy">{esc(plan.get('recovery_note') or '')}</div>
+        </div>
+        <div class="recovery-count">
+          <div class="recovery-days">{esc(days)}</div>
+          <div class="recovery-unit">天后重置</div>
+        </div>
+      </div>
+      <div class="detail-grid mt-3">
+        <div class="detail-item">
+          <div class="info-label">预计重置日期</div>
+          <div class="info-value">{esc(fmt_date(plan.get('next_reset_at')))}</div>
+          <div class="text-secondary small">每月 {esc(plan.get('traffic_reset_day') or 1)} 日 00:00 UTC</div>
+        </div>
+        <div class="detail-item">
+          <div class="info-label">恢复判断</div>
+          <div class="info-value">{esc('自动巡检会开机' if will_auto_start else '暂不自动开机')}</div>
+          <div class="text-secondary small">恢复阈值 {fmt_gb(item.get('start_threshold_gb'))}</div>
+        </div>
+      </div>
+    """
 
 
 def form_value(fields: dict[str, list[str]], name: str, default: str = "") -> str:
@@ -1221,6 +1278,47 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       max-width: 420px;
     }}
     .power-main-btn {{ min-width: 168px; }}
+    .recovery-panel {{
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: flex;
+      gap: 14px;
+      justify-content: space-between;
+      padding: 14px 15px;
+    }}
+    .recovery-ok {{ background: #f1fbf5; border-color: #bde8ca; }}
+    .recovery-paused {{ background: #fff7df; border-color: #ffd98a; }}
+    .recovery-neutral {{ background: #f8fafc; }}
+    .recovery-title {{
+      color: #111827;
+      font-weight: 760;
+      margin-bottom: 3px;
+    }}
+    .recovery-copy {{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }}
+    .recovery-count {{
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-width: 92px;
+      padding: 9px 10px;
+      text-align: center;
+    }}
+    .recovery-days {{
+      color: #111827;
+      font-size: 24px;
+      font-weight: 760;
+      line-height: 1;
+    }}
+    .recovery-unit {{
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 4px;
+    }}
     .detail-actions {{
       align-items: center;
       display: flex;
@@ -1991,6 +2089,7 @@ def render_server_row(item: dict, metadata: dict[str, dict], history: list[dict]
             <span class="progress"><span class="progress-bar {progress_class(item)}" style="width:{pct:.2f}%"></span></span>
             <span class="asset-sub d-block mt-1">{traffic_pool_badge(item)}</span>
             <span class="asset-sub d-block mt-1">{esc(fmt_delta(item.get('traffic_delta_gb')))}</span>
+            <span class="asset-sub d-block mt-1">{esc(recovery_status_badge(item))}</span>
             {sparkline_svg(traffic_values(identity['id'], history, item.get('traffic_gb')))}
             <button class="chart-trigger" type="button" data-chart-trigger data-server-id="{esc(identity['id'])}" data-chart-pool="{esc(item.get('traffic_pool_key') or '')}" data-server-name="{esc(identity['product_name'])}">查看曲线</button>
           </span>
@@ -2053,6 +2152,10 @@ def render_server_detail(item: dict, metadata: dict[str, dict], active: bool = F
           <div class="pool-chip mt-2">{esc(traffic_pool_badge(item))}</div>
           <div class="mt-2">{traffic_delta_badge(item.get('traffic_delta_gb'))}</div>
           <button class="chart-trigger" type="button" data-chart-trigger data-server-id="{esc(identity['id'])}" data-chart-pool="{esc(item.get('traffic_pool_key') or '')}" data-server-name="{esc(identity['product_name'])}">查看 1天/3天/7天/1个月曲线</button>
+        </div>
+        <div class="detail-section">
+          <div class="info-label">预计恢复开机</div>
+          {render_recovery_plan(item)}
         </div>
         <div class="detail-section">
           <div class="info-label">CDT 计费明细</div>
@@ -2520,7 +2623,11 @@ def render_form_guide() -> str:
           <span>达到停机阈值会自动关机；低于恢复启动阈值时才会再次启动，用来避免临界值反复开关。</span>
         </div>
         <div class="guide-step">
-          <strong>6. 保存后的反应</strong>
+          <strong>6. 设置恢复时间</strong>
+          <span>CDT 通常按自然月重置，默认每月 1 日。面板会据此显示预计多少天后可恢复开机。</span>
+        </div>
+        <div class="guide-step">
+          <strong>7. 保存后的反应</strong>
           <span>点击保存后会立即写入配置并做一次检查，按钮会进入等待状态，完成后回到总览页。</span>
         </div>
       </div>
@@ -2581,6 +2688,9 @@ def render_form(item: dict) -> str:
           </div>
           <div class="credential-grid">
             {input_field("start_threshold_gb", "恢复启动阈值 GB", item.get("start_threshold_gb", 175), "number")}
+            {input_field("traffic_reset_day", "CDT 每月重置日", item.get("traffic_reset_day", 1), "number", hint="用于计算预计恢复开机时间。通常填 1，表示每月 1 日重置。")}
+          </div>
+          <div class="credential-grid">
             <div class="mb-3">
               <label class="form-label">自动保护</label>
               <label class="form-check form-switch mt-2">
@@ -2588,6 +2698,7 @@ def render_form(item: dict) -> str:
                 <span class="form-check-label">启用自动巡检和启停</span>
               </label>
             </div>
+            <div></div>
           </div>
         </section>
         <section class="form-section">
@@ -2647,6 +2758,7 @@ def save_server(fields: dict[str, list[str]]) -> str:
         "warning_threshold_gb": as_float(form_value(fields, "warning_threshold_gb"), 160),
         "stop_threshold_gb": as_float(form_value(fields, "stop_threshold_gb"), 180),
         "start_threshold_gb": as_float(form_value(fields, "start_threshold_gb"), 175),
+        "traffic_reset_day": int(max(1, min(as_float(form_value(fields, "traffic_reset_day"), 1), 28))),
         "panel_url": form_value(fields, "panel_url"),
         "panel_username": form_value(fields, "panel_username"),
         "panel_password": panel_password or existing.get("panel_password", ""),

@@ -54,6 +54,68 @@ def iso_now() -> str:
     return utc_now().isoformat(timespec="seconds")
 
 
+def month_days(year: int, month: int) -> int:
+    if month == 12:
+        next_month = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        next_month = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+    this_month = datetime(year, month, 1, tzinfo=timezone.utc)
+    return (next_month - this_month).days
+
+
+def add_month(year: int, month: int) -> tuple[int, int]:
+    if month == 12:
+        return year + 1, 1
+    return year, month + 1
+
+
+def normalize_reset_day(value: Any) -> int:
+    try:
+        day = int(value)
+    except (TypeError, ValueError):
+        day = 1
+    return max(1, min(day, 28))
+
+
+def next_reset_at(reset_day: int, now: datetime | None = None) -> datetime:
+    now = now or utc_now()
+    reset_day = normalize_reset_day(reset_day)
+    day = min(reset_day, month_days(now.year, now.month))
+    candidate = datetime(now.year, now.month, day, tzinfo=timezone.utc)
+    if now >= candidate:
+        year, month = add_month(now.year, now.month)
+        day = min(reset_day, month_days(year, month))
+        candidate = datetime(year, month, day, tzinfo=timezone.utc)
+    return candidate
+
+
+def recovery_plan(item: dict[str, Any], traffic_gb: float | None, ecs_status: str | None, action: str | None) -> dict[str, Any]:
+    reset_day = normalize_reset_day(item.get("traffic_reset_day", 1))
+    reset_at = next_reset_at(reset_day)
+    seconds = max(0, int((reset_at - utc_now()).total_seconds()))
+    days = (seconds + 86399) // 86400
+    auto_start_paused = bool(item.get("manual_stop"))
+    over_stop = traffic_gb is not None and traffic_gb >= float(item.get("stop_threshold_gb", 0))
+    stopped_by_threshold = action in {"stop", "keep_stopped"} or (ecs_status == "Stopped" and over_stop)
+    will_auto_start = stopped_by_threshold and not auto_start_paused
+    if auto_start_paused:
+        note = "手动关机保持中，月初重置后也不会自动开机，需手动开机恢复自动保护。"
+    elif stopped_by_threshold:
+        note = "预计 CDT 月度流量重置后，下一次巡检会低于恢复阈值并自动开机。"
+    else:
+        note = "当前未因流量阈值停机；这里显示下一次 CDT 账期重置时间。"
+    return {
+        "traffic_reset_day": reset_day,
+        "next_reset_at": reset_at.isoformat(timespec="seconds"),
+        "days_until_reset": days,
+        "seconds_until_reset": seconds,
+        "stopped_by_threshold": stopped_by_threshold,
+        "will_auto_start_after_reset": will_auto_start,
+        "auto_start_paused": auto_start_paused,
+        "recovery_note": note,
+    }
+
+
 def load_env(path: Path) -> None:
     if not path.exists():
         raise FileNotFoundError(f"missing config file: {path}")
@@ -89,6 +151,7 @@ def load_config() -> dict[str, Any]:
                 "start_threshold_gb": max(legacy_stop - 5, 0),
                 "traffic_region_id": legacy_traffic_region,
                 "traffic_scope": TRAFFIC_SCOPE_REGION,
+                "traffic_reset_day": 1,
             },
             "instances": [
                 {
@@ -371,6 +434,7 @@ def merged_instance(raw: dict[str, Any], defaults: dict[str, Any]) -> dict[str, 
     item["warning_threshold_gb"] = float(item.get("warning_threshold_gb", 160))
     item["stop_threshold_gb"] = float(item.get("stop_threshold_gb", 180))
     item["start_threshold_gb"] = float(item.get("start_threshold_gb", item["stop_threshold_gb"] - 5))
+    item["traffic_reset_day"] = normalize_reset_day(item.get("traffic_reset_day", 1))
     item["enabled"] = bool(item.get("enabled", True))
     item["manual_stop"] = bool(item.get("manual_stop", False))
     item["region_id"] = item.get("region_id") or require_env("ALIYUN_REGION_ID")
@@ -472,6 +536,7 @@ def run_guard() -> dict[str, Any]:
                 "warning_threshold_gb": item["warning_threshold_gb"],
                 "start_threshold_gb": item["start_threshold_gb"],
                 "stop_threshold_gb": item["stop_threshold_gb"],
+                "traffic_reset_day": item["traffic_reset_day"],
                 "updated_at": iso_now(),
                 "last_error": None,
             }
@@ -491,6 +556,7 @@ def run_guard() -> dict[str, Any]:
                             "action": "disabled",
                             "reason": "配置已禁用，跳过",
                             "api_response": None,
+                            "recovery_plan": recovery_plan(item, None, "Disabled", "disabled"),
                         }
                     )
                     logger.info("%s disabled; skipping API calls", item["id"])
@@ -563,6 +629,7 @@ def run_guard() -> dict[str, Any]:
                         "action": action,
                         "reason": reason,
                         "api_response": api_response,
+                        "recovery_plan": recovery_plan(item, traffic_gb, ecs_status, action),
                     }
                 )
                 logger.info("%s %s traffic=%.4fGB status=%s action=%s", item["id"], item["traffic_pool_label"], traffic_gb, ecs_status, action)
@@ -578,6 +645,7 @@ def run_guard() -> dict[str, Any]:
                         "action": "error",
                         "reason": "执行失败",
                         "last_error": str(exc),
+                        "recovery_plan": recovery_plan(item, None, None, "error"),
                     }
                 )
                 logger.exception("guard failed for %s: %s", item["id"], exc)
