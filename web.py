@@ -176,18 +176,125 @@ def selected_instance(config: dict, server_id: str | None) -> dict:
     return {}
 
 
-def render_dashboard(query: dict[str, list[str]] | None = None) -> bytes:
-    query = query or {}
-    status = read_json(STATUS_FILE, {"summary": {}, "instances": [], "generated_at": "暂无"})
-    config = read_config()
-    history = read_history(80)
-    summary = status.get("summary", {})
-    instances = status.get("instances", [])
-    metadata = config_by_id(config)
-    edit_id = query.get("edit", [""])[0]
-    editing = selected_instance(config, edit_id)
-    flash = query.get("flash", [""])[0]
+def flash_message(code: str) -> str:
+    messages = {
+        "checked": "已完成一次手动检查",
+        "saved": "服务器已保存并完成一次检查",
+        "deleted": "服务器已删除",
+    }
+    return messages.get(code, code)
 
+
+def page_shell(active: str, title: str, subtitle: str, body: str, actions: str = "", flash: str = "") -> bytes:
+    nav = [
+        ("/", "overview", "总览"),
+        ("/servers/new", "servers", "新增/编辑"),
+        ("/logs", "logs", "服务器日志"),
+    ]
+    nav_html = "".join(
+        f'<li class="nav-item {"active" if key == active else ""}"><a class="nav-link" href="{href}"><span class="nav-link-title">{label}</span></a></li>'
+        for href, key, label in nav
+    )
+    flash_html = f'<div class="alert alert-success">{esc(flash_message(flash))}</div>' if flash else ""
+    html_doc = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="60">
+  <title>Aliyun CDT Guard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css">
+  <style>
+    body {{ background: #f4f6fa; }}
+    .navbar-brand {{ letter-spacing: 0; }}
+    .page-wrapper {{ min-height: 100vh; }}
+    .page-header {{ margin-bottom: 1rem; }}
+    .table td {{ vertical-align: middle; }}
+    .note-cell {{ min-width: 220px; white-space: pre-wrap; }}
+    .btn-list form {{ display: inline-block; margin: 0; }}
+    .form-hint {{ margin-top: 4px; }}
+    .credential-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
+    .log-layout {{ display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; }}
+    .log-item summary {{ cursor: pointer; list-style: none; }}
+    .log-item summary::-webkit-details-marker {{ display: none; }}
+    .log-meta {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; }}
+    .grid-full {{ grid-column: 1 / -1; }}
+    .asset-toolbar {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
+    @media (max-width: 992px) {{
+      .credential-grid, .log-layout, .log-meta {{ grid-template-columns: 1fr; }}
+      .table-responsive {{ min-height: 0; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
+      <div class="container-fluid">
+        <h1 class="navbar-brand navbar-brand-autodark">Aliyun CDT Guard</h1>
+        <div class="collapse navbar-collapse show">
+          <ul class="navbar-nav pt-lg-3">{nav_html}</ul>
+        </div>
+      </div>
+    </aside>
+    <div class="page-wrapper">
+      <header class="navbar navbar-expand-md d-print-none">
+        <div class="container-xl">
+          <div>
+            <h2 class="page-title">{esc(title)}</h2>
+            <div class="text-secondary small">{esc(subtitle)}</div>
+          </div>
+          <div class="navbar-nav flex-row order-md-last ms-auto">{actions}</div>
+        </div>
+      </header>
+      <div class="page-body">
+        <div class="container-xl">
+          {flash_html}
+          {body}
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/js/tabler.min.js"></script>
+  <script>
+    function toggleSecret(button) {{
+      const shown = button.dataset.shown === "1";
+      if (shown) {{
+        button.textContent = button.dataset.label || "显示密码";
+        button.dataset.shown = "0";
+      }} else {{
+        button.dataset.label = button.textContent;
+        button.textContent = button.dataset.secret;
+        button.dataset.shown = "1";
+      }}
+    }}
+  </script>
+</body>
+</html>
+"""
+    return html_doc.encode("utf-8")
+
+
+def render_check_action() -> str:
+    return """
+    <form method="post" action="/guard/run">
+      <button class="btn btn-primary" type="submit" title="马上查询 CDT 流量和 ECS 状态，并按阈值执行一次保护判断">手动检查流量</button>
+    </form>
+    """
+
+
+def render_summary_cards(summary: dict) -> str:
+    return f"""
+    <div class="row row-deck row-cards mb-3">
+      <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">总机器</div><div class="h1 mb-0">{esc(summary.get('total', 0))}</div></div></div></div>
+      <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">启用</div><div class="h1 mb-0">{esc(summary.get('enabled', 0))}</div></div></div></div>
+      <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">预警</div><div class="h1 mb-0 text-yellow">{esc(summary.get('warnings', 0))}</div></div></div></div>
+      <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">错误</div><div class="h1 mb-0 text-red">{esc(summary.get('errors', 0))}</div></div></div></div>
+      <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">已停止</div><div class="h1 mb-0">{esc(summary.get('stopped', 0))}</div></div></div></div>
+    </div>
+    """
+
+
+def render_asset_rows(instances: list[dict], metadata: dict[str, dict]) -> str:
     rows = []
     for item in instances:
         meta = metadata.get(str(item.get("id")), {})
@@ -254,7 +361,7 @@ def render_dashboard(query: dict[str, list[str]] | None = None) -> bytes:
                 <div>{esc(item.get('reason'))}</div>
                 <div class="text-secondary small">{esc(item.get('updated_at'))}</div>
                 <div class="btn-list mt-2">
-                  <a class="btn btn-sm" href="/?edit={esc(item.get('id'))}">编辑</a>
+                  <a class="btn btn-sm" href="/servers/edit?id={esc(item.get('id'))}">编辑</a>
                   <form method="post" action="/servers/delete" onsubmit="return confirm('确认删除这台服务器？')">
                     <input type="hidden" name="id" value="{esc(item.get('id'))}">
                     <button class="btn btn-sm btn-outline-danger" type="submit">删除</button>
@@ -264,134 +371,159 @@ def render_dashboard(query: dict[str, list[str]] | None = None) -> bytes:
             </tr>
             """
         )
+    return "".join(rows)
 
-    form = render_form(editing)
-    events = []
-    for event in reversed(history):
-        level = "text-red" if event.get("error") else "text-secondary"
-        events.append(
+
+def render_assets_card(instances: list[dict], metadata: dict[str, dict]) -> str:
+    rows = render_asset_rows(instances, metadata)
+    return f"""
+    <div class="card" id="servers">
+      <div class="card-header">
+        <div class="asset-toolbar w-100">
+          <h3 class="card-title">服务器资产</h3>
+          <div class="btn-list">
+            <a href="/servers/new" class="btn btn-primary btn-sm">新增服务器</a>
+            <a href="/api/status" class="btn btn-sm">状态 JSON</a>
+            <a href="/api/history" class="btn btn-sm">历史 JSON</a>
+          </div>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+          <thead>
+            <tr>
+              <th>产品/机器</th><th>服务器 IP</th><th>阿里云信息</th><th>状态</th><th>CDT 用量</th><th>额度</th><th>登录信息</th><th>备注</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody>{rows if rows else '<tr><td colspan="9" class="text-secondary">暂无服务器，请先新增。</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+    """
+
+
+def render_dashboard(query: dict[str, list[str]] | None = None) -> bytes:
+    query = query or {}
+    status = read_json(STATUS_FILE, {"summary": {}, "instances": [], "generated_at": "暂无"})
+    config = read_config()
+    summary = status.get("summary", {})
+    instances = status.get("instances", [])
+    metadata = config_by_id(config)
+    flash = query.get("flash", [""])[0]
+    body = render_summary_cards(summary) + render_assets_card(instances, metadata)
+    return page_shell(
+        "overview",
+        "CDT 流量保护与服务器资产面板",
+        f"状态更新时间：{status.get('generated_at')}",
+        body,
+        actions=render_check_action(),
+        flash=flash,
+    )
+
+
+def render_server_form_page(query: dict[str, list[str]] | None = None) -> bytes:
+    query = query or {}
+    config = read_config()
+    edit_id = query.get("id", [""])[0]
+    editing = selected_instance(config, edit_id)
+    body = f'<div class="row"><div class="col-xl-8 col-lg-10">{render_form(editing)}</div></div>'
+    return page_shell(
+        "servers",
+        "新增/编辑服务器",
+        "填写阿里云凭证、实例、阈值和资产备注",
+        body,
+        actions=render_check_action(),
+    )
+
+
+def render_logs_page(query: dict[str, list[str]] | None = None) -> bytes:
+    query = query or {}
+    config = read_config()
+    status = read_json(STATUS_FILE, {"instances": [], "generated_at": "暂无"})
+    history = read_history(1000)
+    configured = config.get("instances", [])
+    status_by_id = {str(item.get("id")): item for item in status.get("instances", [])}
+    selected_id = query.get("server", [""])[0]
+    if not selected_id and configured:
+        selected_id = str(configured[0].get("id") or configured[0].get("instance_id"))
+
+    server_links = []
+    for server in configured:
+        server_id = str(server.get("id") or server.get("instance_id"))
+        stat = status_by_id.get(server_id, {})
+        active = "active" if server_id == selected_id else ""
+        count = sum(1 for event in history if str(event.get("id")) == server_id)
+        name = first_value(server.get("product_name"), server.get("label"), stat.get("label"), default=server_id)
+        server_links.append(
             f"""
-            <div class="list-group-item">
-              <div class="row align-items-center">
-                <div class="col-auto"><span class="status-dot status-dot-animated {'bg-red' if event.get('error') else 'bg-green'} d-block"></span></div>
-                <div class="col text-truncate">
-                  <div class="text-body d-block">{esc(event.get('label'))} · {esc(event.get('action'))}</div>
-                  <div class="{level} text-truncate mt-n1">{esc(event.get('reason'))} · {fmt_gb(event.get('traffic_gb'))} · {esc(event.get('status'))}</div>
+            <a href="/logs?server={esc(server_id)}" class="list-group-item list-group-item-action {active}">
+              <div class="d-flex align-items-center">
+                <div class="flex-fill">
+                  <div class="fw-semibold">{esc(name)}</div>
+                  <div class="text-secondary small">{esc(server.get('instance_id'))}</div>
                 </div>
-                <div class="col-auto text-secondary small">{esc(event.get('at'))}</div>
+                <span class="badge bg-secondary-lt">{count}</span>
               </div>
-            </div>
+            </a>
             """
         )
 
-    flash_html = f'<div class="alert alert-success">{esc(flash)}</div>' if flash else ""
-    html_doc = f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="60">
-  <title>Aliyun CDT Guard</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css">
-  <style>
-    body {{ background: #f4f6fa; }}
-    .navbar-brand {{ letter-spacing: 0; }}
-    .page-wrapper {{ min-height: 100vh; }}
-    .table td {{ vertical-align: middle; }}
-    .note-cell {{ min-width: 220px; white-space: pre-wrap; }}
-    .btn-list form {{ display: inline-block; margin: 0; }}
-    .form-hint {{ margin-top: 4px; }}
-    .credential-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
-    @media (max-width: 992px) {{
-      .credential-grid {{ grid-template-columns: 1fr; }}
-      .table-responsive {{ min-height: 0; }}
-    }}
-  </style>
-</head>
-<body>
-  <div class="page">
-    <aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
-      <div class="container-fluid">
-        <h1 class="navbar-brand navbar-brand-autodark">Aliyun CDT Guard</h1>
-        <div class="navbar-nav flex-row d-lg-none"></div>
-        <div class="collapse navbar-collapse show">
-          <ul class="navbar-nav pt-lg-3">
-            <li class="nav-item active"><a class="nav-link" href="/"><span class="nav-link-title">总览</span></a></li>
-            <li class="nav-item"><a class="nav-link" href="#servers"><span class="nav-link-title">服务器资产</span></a></li>
-            <li class="nav-item"><a class="nav-link" href="#add"><span class="nav-link-title">新增/编辑</span></a></li>
-            <li class="nav-item"><a class="nav-link" href="#history"><span class="nav-link-title">历史记录</span></a></li>
-          </ul>
-        </div>
-      </div>
-    </aside>
-    <div class="page-wrapper">
-      <header class="navbar navbar-expand-md d-print-none">
-        <div class="container-xl">
-          <div>
-            <h2 class="page-title">CDT 流量保护与服务器资产面板</h2>
-            <div class="text-secondary small">状态更新时间：{esc(status.get('generated_at'))}</div>
-          </div>
-          <div class="navbar-nav flex-row order-md-last ms-auto">
-            <form method="post" action="/guard/run">
-              <button class="btn btn-primary" type="submit">立即巡检</button>
-            </form>
-          </div>
-        </div>
-      </header>
-      <div class="page-body">
-        <div class="container-xl">
-          {flash_html}
-          <div class="row row-deck row-cards mb-3">
-            <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">总机器</div><div class="h1 mb-0">{esc(summary.get('total', 0))}</div></div></div></div>
-            <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">启用</div><div class="h1 mb-0">{esc(summary.get('enabled', 0))}</div></div></div></div>
-            <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">预警</div><div class="h1 mb-0 text-yellow">{esc(summary.get('warnings', 0))}</div></div></div></div>
-            <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">错误</div><div class="h1 mb-0 text-red">{esc(summary.get('errors', 0))}</div></div></div></div>
-            <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">已停止</div><div class="h1 mb-0">{esc(summary.get('stopped', 0))}</div></div></div></div>
-          </div>
-          <div class="card mb-3" id="servers">
-            <div class="card-header"><h3 class="card-title">服务器资产</h3><div class="card-actions"><a href="/api/status" class="btn btn-sm">状态 JSON</a><a href="/api/history" class="btn btn-sm">历史 JSON</a></div></div>
-            <div class="table-responsive">
-              <table class="table table-vcenter card-table">
-                <thead>
-                  <tr>
-                    <th>产品/机器</th><th>服务器 IP</th><th>阿里云信息</th><th>状态</th><th>CDT 用量</th><th>额度</th><th>登录信息</th><th>备注</th><th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>{''.join(rows) if rows else '<tr><td colspan="9" class="text-secondary">暂无服务器，请先在下面添加。</td></tr>'}</tbody>
-              </table>
-            </div>
-          </div>
-          <div class="row row-cards">
-            <div class="col-lg-5" id="add">{form}</div>
-            <div class="col-lg-7" id="history">
-              <div class="card">
-                <div class="card-header"><h3 class="card-title">最近记录</h3></div>
-                <div class="list-group list-group-flush">{''.join(events) if events else '<div class="list-group-item text-secondary">暂无记录</div>'}</div>
+    selected_logs = [
+        event for event in reversed(history)
+        if not selected_id or str(event.get("id")) == selected_id
+    ]
+    log_items = []
+    for event in selected_logs:
+        danger = bool(event.get("error"))
+        log_items.append(
+            f"""
+            <details class="list-group-item log-item">
+              <summary>
+                <div class="row align-items-center">
+                  <div class="col-auto"><span class="status-dot {'bg-red' if danger else 'bg-green'} d-block"></span></div>
+                  <div class="col text-truncate">
+                    <div class="fw-semibold">{esc(event.get('label'))} · {esc(event.get('action'))}</div>
+                    <div class="text-secondary text-truncate">{esc(event.get('reason'))}</div>
+                  </div>
+                  <div class="col-auto text-secondary small">{esc(event.get('at'))}</div>
+                </div>
+              </summary>
+              <div class="mt-3 log-meta">
+                <div><span class="text-secondary">流量</span><div>{fmt_gb(event.get('traffic_gb'))}</div></div>
+                <div><span class="text-secondary">ECS 状态</span><div>{esc(event.get('status'))}</div></div>
+                <div><span class="text-secondary">动作</span><div>{esc(event.get('action'))}</div></div>
+                <div><span class="text-secondary">时间</span><div>{esc(event.get('at'))}</div></div>
+                <div class="grid-full"><span class="text-secondary">原因</span><div>{esc(event.get('reason'))}</div></div>
+                {f'<div class="grid-full text-red"><span>错误</span><div>{esc(event.get("error"))}</div></div>' if danger else ''}
               </div>
-            </div>
+            </details>
+            """
+        )
+
+    body = f"""
+    <div class="log-layout">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">服务器</h3></div>
+        <div class="list-group list-group-flush">{''.join(server_links) if server_links else '<div class="list-group-item text-secondary">暂无服务器</div>'}</div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="asset-toolbar w-100">
+            <h3 class="card-title">日志详情</h3>
+            <a class="btn btn-sm" href="/api/history">历史 JSON</a>
           </div>
         </div>
+        <div class="list-group list-group-flush">{''.join(log_items) if log_items else '<div class="list-group-item text-secondary">暂无日志</div>'}</div>
       </div>
     </div>
-  </div>
-  <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/js/tabler.min.js"></script>
-  <script>
-    function toggleSecret(button) {{
-      const shown = button.dataset.shown === "1";
-      if (shown) {{
-        button.textContent = button.dataset.label || "显示密码";
-        button.dataset.shown = "0";
-      }} else {{
-        button.dataset.label = button.textContent;
-        button.textContent = button.dataset.secret;
-        button.dataset.shown = "1";
-      }}
-    }}
-  </script>
-</body>
-</html>
-"""
-    return html_doc.encode("utf-8")
+    """
+    return page_shell(
+        "logs",
+        "服务器日志",
+        "按服务器查看最近巡检、启停和错误记录",
+        body,
+        actions=render_check_action(),
+    )
 
 
 def input_field(name: str, label: str, value="", field_type: str = "text", placeholder: str = "", hint: str = "", required: bool = False) -> str:
@@ -551,6 +683,15 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_bytes(render_dashboard(query), "text/html; charset=utf-8")
             return
+        if parsed.path == "/servers/new":
+            self.send_bytes(render_server_form_page(query), "text/html; charset=utf-8")
+            return
+        if parsed.path == "/servers/edit":
+            self.send_bytes(render_server_form_page(query), "text/html; charset=utf-8")
+            return
+        if parsed.path == "/logs":
+            self.send_bytes(render_logs_page(query), "text/html; charset=utf-8")
+            return
         if parsed.path == "/api/status":
             self.send_json(read_json(STATUS_FILE, {"error": "status not found"}))
             return
@@ -575,16 +716,16 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/servers/save":
             save_server(fields)
             run_guard_now()
-            self.redirect("/?flash=服务器已保存并完成一次巡检")
+            self.redirect("/?flash=saved")
             return
         if parsed.path == "/servers/delete":
             delete_server(form_value(fields, "id"))
             run_guard_now()
-            self.redirect("/?flash=服务器已删除")
+            self.redirect("/?flash=deleted")
             return
         if parsed.path == "/guard/run":
             run_guard_now()
-            self.redirect("/?flash=已完成一次手动巡检")
+            self.redirect("/?flash=checked")
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
