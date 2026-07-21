@@ -751,10 +751,34 @@ def render_login_page(query: dict[str, list[str]] | None = None) -> bytes:
     return html_doc.encode("utf-8")
 
 
+def render_brand_logo() -> str:
+    return """
+      <span class="brand-lockup" aria-label="Aliyun CDT Guard">
+        <svg class="brand-mark" viewBox="0 0 72 72" role="img" aria-hidden="true">
+          <defs>
+            <linearGradient id="brandShieldGradient" x1="10" y1="14" x2="62" y2="58" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#22d3ee"/>
+              <stop offset="0.55" stop-color="#1686f2"/>
+              <stop offset="1" stop-color="#0755d7"/>
+            </linearGradient>
+          </defs>
+          <path d="M36 5 62 17v19c0 16-10.7 26.8-26 32C20.7 62.8 10 52 10 36V17L36 5Z" fill="url(#brandShieldGradient)"/>
+          <path d="M24.8 43.8h27.8c5.2 0 9.4-4 9.4-9s-4.2-9-9.4-9c-1 0-2 .1-2.9.4C47.6 18.7 40.8 13.6 33 13.6c-9 0-16.4 6.7-17.2 15.3C11 30.2 7.5 34.3 7.5 39.2c0 6 5.1 10.9 11.4 10.9h5.9c-3.4-1.4-5.8-4.7-5.8-8.6 0-5.1 4.1-9.2 9.2-9.2h8.7l-4.1 6.2h-4.6c-1.7 0-3 1.3-3 3s1.3 3.1 3 3.1h9.2l-3.4 5.5h-9.2Z" fill="#fff"/>
+          <path d="M38 32.3h16.2l-3.8 6.2h-4.6v11.6h-6.6V38.5h-5L38 32.3Z" fill="#fff"/>
+          <path d="M29 32.3h10.2l-3.9 6.2H29c-1.7 0-3 1.3-3 3s1.3 3.1 3 3.1h4.7l-3.4 5.5H29c-5.1 0-9.2-3.8-9.2-8.6s4.1-9.2 9.2-9.2Z" fill="#fff"/>
+        </svg>
+        <span class="brand-text">
+          <span class="brand-name">Aliyun <span>CDT</span> Guard</span>
+          <span class="brand-subtitle">Traffic Protection</span>
+        </span>
+      </span>
+    """
+
+
 def page_shell(active: str, title: str, subtitle: str, body: str, actions: str = "", flash: str = "", auto_refresh: bool = True) -> bytes:
     nav = [
         ("/", "overview", "总览"),
-        ("/servers/new", "servers", "新增/编辑"),
+        ("/servers/new", "servers", "新增服务器"),
         ("/logs", "logs", "服务器日志"),
         ("/notifications", "notifications", "通知设置"),
         ("/domain", "domain", "域名反代"),
@@ -814,13 +838,47 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       box-shadow: 0 24px 70px rgba(15, 23, 42, 0.12);
     }}
     .navbar-brand {{
-      align-items: flex-start;
       color: #fff;
-      font-size: 18px;
-      font-weight: 720;
+      display: block;
+      padding: 22px 20px 18px;
+      white-space: normal;
+    }}
+    .brand-lockup {{
+      align-items: center;
+      display: flex;
+      gap: 11px;
+      min-width: 0;
+    }}
+    .brand-mark {{
+      flex: 0 0 auto;
+      height: 44px;
+      width: 44px;
+      filter: drop-shadow(0 12px 22px rgba(23, 99, 209, .30));
+    }}
+    .brand-text {{
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }}
+    .brand-name {{
+      color: #f8fafc;
+      display: block;
+      font-size: 16px;
+      font-weight: 820;
       letter-spacing: 0;
-      line-height: 1.2;
-      padding: 24px 22px 14px;
+      line-height: 1.05;
+    }}
+    .brand-name span {{
+      color: #38bdf8;
+    }}
+    .brand-subtitle {{
+      color: #8ea3c3;
+      display: block;
+      font-size: 10px;
+      font-weight: 760;
+      letter-spacing: .08em;
+      line-height: 1.1;
+      text-transform: uppercase;
     }}
     .navbar .nav-link {{
       border-radius: 8px;
@@ -2172,7 +2230,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
   <div class="page">
     <aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
       <div class="container-fluid">
-        <h1 class="navbar-brand navbar-brand-autodark">Aliyun CDT Guard</h1>
+        <h1 class="navbar-brand navbar-brand-autodark">{render_brand_logo()}</h1>
         <div class="collapse navbar-collapse show">
           <ul class="navbar-nav pt-lg-3">{nav_html}</ul>
         </div>
@@ -3194,7 +3252,7 @@ def render_assets_card(instances: list[dict], metadata: dict[str, dict], history
             {group_html}
           </div>
           <div class="empty-state" data-empty-state hidden>没有符合条件的服务器</div>
-          {'' if group_html else '<div class="empty-state">暂无服务器，请到“新增/编辑”添加第一台。</div>'}
+          {'' if group_html else '<div class="empty-state">暂无服务器，请到“新增服务器”添加第一台。</div>'}
         </div>
         <aside class="server-detail-panel">
           {''.join(details) if details else '<div class="empty-state">选择一台服务器查看详情。</div>'}
@@ -3239,7 +3297,7 @@ def render_server_form_page(query: dict[str, list[str]] | None = None) -> bytes:
     """
     return page_shell(
         "servers",
-        "新增/编辑服务器",
+        "新增服务器",
         "填写阿里云凭证、实例、阈值和资产备注",
         body,
         actions='<a href="/" class="btn">返回总览</a>',
