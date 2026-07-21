@@ -20,7 +20,9 @@ apt_lock_holder() {
   local lock_path="$1"
   if need_cmd fuser; then
     fuser "$lock_path" 2>/dev/null | tr ' ' '\n' | sed '/^$/d' | head -n 1
+    return
   fi
+  ps -eo pid=,comm= | awk '$2 ~ /^(apt|apt-get|dpkg|unattended-upgrades|unattended-upgrade)$/ {print $1; exit}'
 }
 
 wait_for_apt_locks() {
@@ -64,15 +66,50 @@ wait_for_apt_locks() {
 }
 
 apt_run() {
-  wait_for_apt_locks
-  apt-get -o DPkg::Lock::Timeout="${APT_LOCK_WAIT_SECONDS:-300}" "$@"
+  local waited=0
+  local max_wait="${APT_LOCK_WAIT_SECONDS:-300}"
+  local output=""
+  local status=0
+  local holder=""
+
+  while true; do
+    wait_for_apt_locks
+    set +e
+    output="$(apt-get -o DPkg::Lock::Timeout="$max_wait" "$@" 2>&1)"
+    status=$?
+    set -e
+    printf '%s\n' "$output"
+
+    if [ "$status" -eq 0 ]; then
+      return 0
+    fi
+
+    if ! printf '%s\n' "$output" | grep -Eq 'Could not get lock|Unable to acquire the dpkg frontend lock|Unable to lock directory|is another process using it'; then
+      return "$status"
+    fi
+
+    if [ "$waited" -ge "$max_wait" ]; then
+      echo "APT/dpkg lock did not clear after ${max_wait}s."
+      return "$status"
+    fi
+
+    holder="$(printf '%s\n' "$output" | sed -n 's/.*process \([0-9][0-9]*\).*/\1/p' | head -n 1)"
+    if [ -n "$holder" ]; then
+      echo "APT/dpkg is locked by process $holder. Waiting... (${waited}s/${max_wait}s)"
+      ps -fp "$holder" || true
+    else
+      echo "APT/dpkg is locked. Waiting... (${waited}s/${max_wait}s)"
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
 }
 
 install_packages() {
   if need_cmd apt-get; then
     export DEBIAN_FRONTEND=noninteractive
     apt_run update -y
-    apt_run install -y python3 python3-venv python3-pip git curl openssl cron ca-certificates psmisc
+    apt_run install -y python3 python3-venv python3-pip git curl openssl cron ca-certificates
   elif need_cmd dnf; then
     dnf install -y python3 python3-pip git curl openssl
   elif need_cmd yum; then
