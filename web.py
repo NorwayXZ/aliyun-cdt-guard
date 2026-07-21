@@ -262,6 +262,12 @@ def render_recovery_plan(item: dict) -> str:
     paused = bool(plan.get("auto_start_paused"))
     status_text = "会自动开机" if will_auto_start else ("手动关机保持中" if paused else "未处于自动恢复队列")
     status_class = "recovery-ok" if will_auto_start else ("recovery-paused" if paused else "recovery-neutral")
+    source = plan.get("reset_source")
+    source_label = plan.get("reset_source_label") or ("BSS 账单 API" if source == "bss" else "配置推算")
+    if source == "bss":
+        reset_hint = f"来源：{source_label} · 账期 {plan.get('billing_cycle') or '未知'} · {plan.get('billing_region_id') or ''}"
+    else:
+        reset_hint = f"来源：{source_label} · 每月 {plan.get('traffic_reset_day') or 1} 日 00:00 UTC"
     return f"""
       <div class="recovery-panel {status_class}">
         <div>
@@ -275,9 +281,9 @@ def render_recovery_plan(item: dict) -> str:
       </div>
       <div class="detail-grid mt-3">
         <div class="detail-item">
-          <div class="info-label">预计重置日期</div>
-          <div class="info-value">{esc(fmt_date(plan.get('next_reset_at')))}</div>
-          <div class="text-secondary small">每月 {esc(plan.get('traffic_reset_day') or 1)} 日 00:00 UTC</div>
+          <div class="info-label">账期重置时间</div>
+          <div class="info-value">{esc(fmt_time(plan.get('next_reset_at')))}</div>
+          <div class="text-secondary small">{esc(reset_hint)}</div>
         </div>
         <div class="detail-item">
           <div class="info-label">恢复判断</div>
@@ -3204,7 +3210,7 @@ def render_form(item: dict) -> str:
           </div>
           <div class="credential-grid">
             {input_field("start_threshold_gb", "恢复启动阈值 GB", item.get("start_threshold_gb", 175), "number")}
-            {input_field("traffic_reset_day", "CDT 每月重置日", item.get("traffic_reset_day", 1), "number", hint="用于计算预计恢复开机时间。通常填 1，表示每月 1 日重置。")}
+            {input_field("traffic_reset_day", "CDT 每月重置日", item.get("traffic_reset_day", 1), "number", hint="BSS 账单 API 不可用时才作为备用推算。通常填 1，表示每月 1 日重置。")}
           </div>
           <div class="credential-grid">
             <div class="mb-3">

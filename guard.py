@@ -37,6 +37,12 @@ TRAFFIC_SCOPES = {
     TRAFFIC_SCOPE_ACCOUNT_NON_CHINA,
     TRAFFIC_SCOPE_ACCOUNT_ALL,
 }
+BILLING_TIMEZONE = timezone(timedelta(hours=8))
+BSS_ENDPOINTS = [
+    ("cn-hongkong", "business.aliyuncs.com"),
+    ("cn-hangzhou", "business.aliyuncs.com"),
+    ("ap-southeast-1", "business.ap-southeast-1.aliyuncs.com"),
+]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +50,7 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+logging.getLogger("aliyunsdkcore").setLevel(logging.CRITICAL)
 
 
 def utc_now() -> datetime:
@@ -89,9 +96,76 @@ def next_reset_at(reset_day: int, now: datetime | None = None) -> datetime:
     return candidate
 
 
-def recovery_plan(item: dict[str, Any], traffic_gb: float | None, ecs_status: str | None, action: str | None) -> dict[str, Any]:
+def billing_cycle_now(now: datetime | None = None) -> str:
+    return (now or utc_now()).astimezone(BILLING_TIMEZONE).strftime("%Y-%m")
+
+
+def next_billing_cycle_start(billing_cycle: str) -> datetime:
+    year_text, _, month_text = str(billing_cycle).partition("-")
+    year = int(year_text)
+    month = int(month_text)
+    next_year, next_month = add_month(year, month)
+    return datetime(next_year, next_month, 1, tzinfo=BILLING_TIMEZONE)
+
+
+def query_billing_cycle_info(item: dict[str, Any]) -> dict[str, Any]:
+    billing_cycle = billing_cycle_now()
+    last_error = ""
+    for region_id, domain in BSS_ENDPOINTS:
+        try:
+            client = AcsClient(item["access_key_id"], item["access_key_secret"], region_id)
+            request = CommonRequest()
+            request.set_domain(domain)
+            request.set_version("2017-12-14")
+            request.set_action_name("QueryBillOverview")
+            request.set_method("POST")
+            request.set_accept_format("json")
+            request.add_query_param("BillingCycle", billing_cycle)
+            request.add_query_param("ProductCode", "cdt")
+            response = client.do_action_with_exception(request)
+            response_json = json.loads(response.decode("utf-8"))
+            rows = ((response_json.get("Data") or {}).get("Items") or {}).get("Item") or []
+            first_row = rows[0] if rows else {}
+            reset_at = next_billing_cycle_start(billing_cycle)
+            return {
+                "source": "bss",
+                "source_label": "BSS 账单 API",
+                "billing_cycle": billing_cycle,
+                "billing_product_code": first_row.get("ProductCode") or "cdt",
+                "billing_product_name": first_row.get("ProductName") or "云数据传输",
+                "billing_endpoint": domain,
+                "billing_region_id": region_id,
+                "billing_request_id": response_json.get("RequestId"),
+                "billing_row_count": len(rows),
+                "next_reset_at": reset_at.isoformat(timespec="seconds"),
+            }
+        except Exception as exc:
+            last_error = str(exc)[:500]
+    return {
+        "source": "config",
+        "source_label": "配置推算",
+        "billing_cycle": billing_cycle,
+        "billing_error": last_error,
+    }
+
+
+def recovery_plan(
+    item: dict[str, Any],
+    traffic_gb: float | None,
+    ecs_status: str | None,
+    action: str | None,
+    billing_info: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     reset_day = normalize_reset_day(item.get("traffic_reset_day", 1))
-    reset_at = next_reset_at(reset_day)
+    billing_info = billing_info or {}
+    if billing_info.get("source") == "bss" and billing_info.get("next_reset_at"):
+        reset_at = datetime.fromisoformat(str(billing_info["next_reset_at"]))
+        reset_source = "bss"
+        reset_source_label = "BSS 账单 API"
+    else:
+        reset_at = next_reset_at(reset_day)
+        reset_source = "config"
+        reset_source_label = "配置推算"
     seconds = max(0, int((reset_at - utc_now()).total_seconds()))
     days = (seconds + 86399) // 86400
     auto_start_paused = bool(item.get("manual_stop"))
@@ -109,6 +183,15 @@ def recovery_plan(item: dict[str, Any], traffic_gb: float | None, ecs_status: st
         "next_reset_at": reset_at.isoformat(timespec="seconds"),
         "days_until_reset": days,
         "seconds_until_reset": seconds,
+        "reset_source": reset_source,
+        "reset_source_label": reset_source_label,
+        "billing_cycle": billing_info.get("billing_cycle"),
+        "billing_product_code": billing_info.get("billing_product_code"),
+        "billing_product_name": billing_info.get("billing_product_name"),
+        "billing_endpoint": billing_info.get("billing_endpoint"),
+        "billing_region_id": billing_info.get("billing_region_id"),
+        "billing_request_id": billing_info.get("billing_request_id"),
+        "billing_error": billing_info.get("billing_error"),
         "stopped_by_threshold": stopped_by_threshold,
         "will_auto_start_after_reset": will_auto_start,
         "auto_start_paused": auto_start_paused,
@@ -503,6 +586,7 @@ def run_guard() -> dict[str, Any]:
     }
     client_cache: dict[str, AcsClient] = {}
     traffic_cache: dict[tuple[str, str, str | None], dict[str, Any]] = {}
+    billing_cache: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
 
@@ -586,6 +670,10 @@ def run_guard() -> dict[str, Any]:
                 if key not in traffic_cache:
                     traffic_cache[key] = get_traffic_report(client, traffic_region_id, traffic_scope)
                 traffic_report = traffic_cache[key]
+                billing_key = credential_fingerprint(item.get("access_key_id"))
+                if billing_key not in billing_cache:
+                    billing_cache[billing_key] = query_billing_cycle_info(item)
+                billing_info = billing_cache[billing_key]
                 traffic_gb = float(traffic_report["traffic_gb"])
                 previous_traffic = previous_by_pool.get(pool_key, previous_by_id.get(str(item["id"]), {})).get("traffic_gb")
                 traffic_delta_gb = None
@@ -629,7 +717,16 @@ def run_guard() -> dict[str, Any]:
                         "action": action,
                         "reason": reason,
                         "api_response": api_response,
-                        "recovery_plan": recovery_plan(item, traffic_gb, ecs_status, action),
+                        "billing_cycle_source": billing_info.get("source"),
+                        "billing_cycle_source_label": billing_info.get("source_label"),
+                        "billing_cycle": billing_info.get("billing_cycle"),
+                        "billing_product_code": billing_info.get("billing_product_code"),
+                        "billing_product_name": billing_info.get("billing_product_name"),
+                        "billing_endpoint": billing_info.get("billing_endpoint"),
+                        "billing_region_id": billing_info.get("billing_region_id"),
+                        "billing_request_id": billing_info.get("billing_request_id"),
+                        "billing_error": billing_info.get("billing_error"),
+                        "recovery_plan": recovery_plan(item, traffic_gb, ecs_status, action, billing_info),
                     }
                 )
                 logger.info("%s %s traffic=%.4fGB status=%s action=%s", item["id"], item["traffic_pool_label"], traffic_gb, ecs_status, action)
