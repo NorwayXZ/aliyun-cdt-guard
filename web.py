@@ -250,7 +250,7 @@ def flash_message(code: str) -> str:
     return messages.get(code, code)
 
 
-def page_shell(active: str, title: str, subtitle: str, body: str, actions: str = "", flash: str = "") -> bytes:
+def page_shell(active: str, title: str, subtitle: str, body: str, actions: str = "", flash: str = "", auto_refresh: bool = True) -> bytes:
     nav = [
         ("/", "overview", "总览"),
         ("/servers/new", "servers", "新增/编辑"),
@@ -261,12 +261,13 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
         for href, key, label in nav
     )
     flash_html = f'<div class="alert alert-success">{esc(flash_message(flash))}</div>' if flash else ""
+    refresh_meta = '<meta http-equiv="refresh" content="60">' if auto_refresh else ""
     html_doc = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="60">
+  {refresh_meta}
   <title>Aliyun CDT Guard</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css">
   <style>
@@ -734,6 +735,76 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     }}
     .form-label {{ color: #1f2937; font-weight: 680; }}
     .form-hint {{ margin-top: 5px; }}
+    .form-layout {{
+      align-items: start;
+      display: grid;
+      gap: 18px;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      margin: 0 auto;
+      max-width: 1180px;
+    }}
+    .form-section {{
+      border-top: 1px solid var(--line);
+      padding-top: 22px;
+    }}
+    .form-section:first-child {{
+      border-top: 0;
+      padding-top: 0;
+    }}
+    .form-section-title {{
+      color: #111827;
+      font-size: 15px;
+      font-weight: 760;
+      margin: 0 0 14px;
+    }}
+    .guide-panel {{
+      position: sticky;
+      top: 94px;
+    }}
+    .guide-panel .card-body {{
+      display: grid;
+      gap: 16px;
+      padding: 18px;
+    }}
+    .guide-step {{
+      border-left: 3px solid var(--line);
+      padding-left: 12px;
+    }}
+    .guide-step strong {{
+      color: #111827;
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }}
+    .guide-step span {{
+      color: var(--muted);
+      display: block;
+      font-size: 12px;
+      line-height: 1.55;
+    }}
+    .submit-feedback {{
+      align-items: center;
+      color: var(--muted);
+      display: none;
+      font-size: 13px;
+      gap: 8px;
+      margin-right: auto;
+    }}
+    .save-form.is-submitting .submit-feedback {{ display: inline-flex; }}
+    .save-form.is-submitting .btn-submit {{
+      cursor: wait;
+      opacity: .85;
+    }}
+    .spinner-dot {{
+      animation: spin .75s linear infinite;
+      border: 2px solid rgba(23, 99, 209, .18);
+      border-radius: 999px;
+      border-top-color: var(--accent);
+      display: inline-block;
+      height: 16px;
+      width: 16px;
+    }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
     .credential-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
     .log-layout {{ display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; }}
     .log-item summary {{ cursor: pointer; list-style: none; }}
@@ -743,6 +814,8 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     .asset-toolbar {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
     @media (max-width: 1180px) {{
       .asset-workspace {{ grid-template-columns: 1fr; }}
+      .form-layout {{ grid-template-columns: 1fr; }}
+      .guide-panel {{ position: static; }}
       .server-detail-panel {{ position: static; }}
       .server-list {{ max-height: none; }}
     }}
@@ -777,6 +850,12 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       .server-state {{ min-width: 0; }}
       .traffic-compact {{ display: block; }}
       .server-detail.active {{ padding: 14px; }}
+      .card-footer.d-flex {{
+        align-items: stretch !important;
+        flex-direction: column;
+      }}
+      .submit-feedback {{ margin-right: 0; }}
+      .btn-submit.ms-auto {{ margin-left: 0 !important; }}
       .detail-actions {{ align-items: stretch; flex-direction: column; }}
       .detail-actions .btn, .detail-actions .overflow-menu {{ width: 100%; }}
       .overflow-popover {{
@@ -892,7 +971,27 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       [search, filter, sort].forEach((input) => input && input.addEventListener("input", applyFilters));
       applyFilters();
     }}
+    function initSaveForms() {{
+      document.querySelectorAll("[data-save-form]").forEach((form) => {{
+        form.addEventListener("submit", (event) => {{
+          if (form.dataset.submitting === "1") {{
+            event.preventDefault();
+            return;
+          }}
+          if (!form.checkValidity()) return;
+          form.dataset.submitting = "1";
+          form.classList.add("is-submitting");
+          const button = form.querySelector("[data-submit-button]");
+          if (button) {{
+            button.disabled = true;
+            button.dataset.originalText = button.textContent;
+            button.textContent = button.dataset.loadingText || "正在保存...";
+          }}
+        }});
+      }});
+    }}
     document.addEventListener("DOMContentLoaded", initAssetBoard);
+    document.addEventListener("DOMContentLoaded", initSaveForms);
   </script>
 </body>
 </html>
@@ -1287,13 +1386,19 @@ def render_server_form_page(query: dict[str, list[str]] | None = None) -> bytes:
     config = read_config()
     edit_id = query.get("id", [""])[0]
     editing = selected_instance(config, edit_id)
-    body = f'<div class="row justify-content-center"><div class="col-xl-8 col-lg-10">{render_form(editing)}</div></div>'
+    body = f"""
+    <div class="form-layout">
+      <div>{render_form(editing)}</div>
+      {render_form_guide()}
+    </div>
+    """
     return page_shell(
         "servers",
         "新增/编辑服务器",
         "填写阿里云凭证、实例、阈值和资产备注",
         body,
-        actions=render_check_action(),
+        actions='<a href="/" class="btn">返回总览</a>',
+        auto_refresh=False,
     )
 
 
@@ -1399,71 +1504,112 @@ def input_field(name: str, label: str, value="", field_type: str = "text", place
     )
 
 
+def render_form_guide() -> str:
+    return """
+    <aside class="card guide-panel">
+      <div class="card-header"><h3 class="card-title">填写说明</h3></div>
+      <div class="card-body">
+        <div class="guide-step">
+          <strong>1. 先填识别信息</strong>
+          <span>产品名和服务器 IP 是给你自己看的，建议写成能一眼认出来的名字。</span>
+        </div>
+        <div class="guide-step">
+          <strong>2. 填 ECS 实例信息</strong>
+          <span>Instance ID 和区域 ID 必须和阿里云 ECS 控制台里显示的一致，例如 cn-hongkong。</span>
+        </div>
+        <div class="guide-step">
+          <strong>3. 填 AccessKey</strong>
+          <span>这里不会自动带入任何密钥。请填写这台服务器所属阿里云账号或 RAM 用户的 AccessKey ID 和 Secret。</span>
+        </div>
+        <div class="guide-step">
+          <strong>4. 设置阈值</strong>
+          <span>达到停机阈值会自动关机；低于恢复启动阈值时才会再次启动，用来避免临界值反复开关。</span>
+        </div>
+        <div class="guide-step">
+          <strong>5. 保存后的反应</strong>
+          <span>点击保存后会立即写入配置并做一次检查，按钮会进入等待状态，完成后回到总览页。</span>
+        </div>
+      </div>
+    </aside>
+    """
+
+
 def render_form(item: dict) -> str:
     is_edit = bool(item)
     title = "编辑服务器" if is_edit else "新增服务器"
     id_value = item.get("id", "")
-    global_env = load_env(BASE_DIR / "guard.env")
-    access_key_id = first_value(item.get("access_key_id"), global_env.get("ALIYUN_ACCESS_KEY_ID"))
+    access_key_id = item.get("access_key_id", "")
     secret_hint = "编辑时留空则保留原 Secret" if is_edit else ""
     panel_password_hint = "编辑时留空则保留原密码" if is_edit else ""
     return f"""
-    <form class="card" method="post" action="/servers/save">
+    <form class="card save-form" method="post" action="/servers/save" data-save-form>
       <div class="card-header"><h3 class="card-title">{title}</h3></div>
       <div class="card-body">
         <input type="hidden" name="original_id" value="{esc(id_value)}">
-        {input_field("product_name", "产品自定义名字", item.get("product_name", ""), placeholder="例如：阿里云香港 1号机", required=True)}
-        <div class="credential-grid">
-          {input_field("label", "服务器别名", item.get("label", ""), placeholder="例如：HK-01")}
-          {input_field("provider", "服务商", item.get("provider", "阿里云"))}
-        </div>
-        <div class="credential-grid">
-          {input_field("server_ip", "服务器 IP", first_value(item.get("server_ip"), item.get("public_ip")), placeholder="可留空，系统会从 ECS 读取")}
-          {input_field("instance_id", "ECS Instance ID", item.get("instance_id", ""), placeholder="i-xxxxxxxx", required=True)}
-        </div>
-        <div class="credential-grid">
-          {input_field("region_id", "区域 ID", item.get("region_id", "cn-hongkong"), placeholder="cn-hongkong", required=True)}
-          {input_field("traffic_region_id", "CDT 流量区域", item.get("traffic_region_id", item.get("region_id", "cn-hongkong")), placeholder="cn-hongkong")}
-        </div>
-        <div class="credential-grid">
-          {input_field("access_key_id", "阿里云 AccessKey ID", access_key_id, required=True)}
-          {input_field("access_key_secret", "阿里云 AccessKey Secret", "", "password", hint=secret_hint, required=not is_edit)}
-        </div>
-        <div class="credential-grid">
-          {input_field("warning_threshold_gb", "预警阈值 GB", item.get("warning_threshold_gb", 160), "number")}
-          {input_field("stop_threshold_gb", "停机阈值 GB", item.get("stop_threshold_gb", 180), "number")}
-        </div>
-        <div class="credential-grid">
-          {input_field("start_threshold_gb", "恢复启动阈值 GB", item.get("start_threshold_gb", 175), "number")}
-          <div class="mb-3">
-            <label class="form-label">自动保护</label>
-            <label class="form-check form-switch mt-2">
-              <input class="form-check-input" type="checkbox" name="enabled" value="1" {"checked" if item.get("enabled", True) else ""}>
-              <span class="form-check-label">启用自动巡检和启停</span>
-            </label>
+        <section class="form-section">
+          <h3 class="form-section-title">基础识别</h3>
+          {input_field("product_name", "产品自定义名字", item.get("product_name", ""), placeholder="例如：阿里云香港 1号机", required=True)}
+          <div class="credential-grid">
+            {input_field("label", "服务器别名", item.get("label", ""), placeholder="例如：HK-01")}
+            {input_field("provider", "服务商", item.get("provider", "阿里云"))}
           </div>
-        </div>
-        <hr>
-        <div class="credential-grid">
-          {input_field("panel_url", "服务器登录网站", item.get("panel_url", ""), placeholder="https://example.com/clientarea")}
-          {input_field("panel_username", "登录网站账号", item.get("panel_username", ""))}
-        </div>
-        <div class="credential-grid">
-          {input_field("panel_password", "登录网站密码", "", "password", hint=panel_password_hint)}
-          {input_field("ssh_user", "SSH 用户", item.get("ssh_user", "root"))}
-        </div>
-        <div class="credential-grid">
-          {input_field("ssh_port", "SSH 端口", item.get("ssh_port", 22), "number")}
-          {input_field("ssh_password", "SSH 密码备注", "", "password", hint=panel_password_hint)}
-        </div>
-        <div class="mb-3">
-          <label class="form-label">备注</label>
-          <textarea class="form-control" name="notes" rows="4" placeholder="用途、购买平台、套餐、到期时间、注意事项">{esc(item.get("notes", ""))}</textarea>
-        </div>
+          <div class="credential-grid">
+            {input_field("server_ip", "服务器 IP", first_value(item.get("server_ip"), item.get("public_ip")), placeholder="例如：154.83.98.194")}
+            {input_field("instance_id", "ECS Instance ID", item.get("instance_id", ""), placeholder="例如：i-j6ceg1880o7i5vxdpeq4", required=True)}
+          </div>
+        </section>
+        <section class="form-section">
+          <h3 class="form-section-title">阿里云凭证与区域</h3>
+          <div class="credential-grid">
+            {input_field("region_id", "区域 ID", item.get("region_id", "cn-hongkong"), placeholder="例如：cn-hongkong", required=True)}
+            {input_field("traffic_region_id", "CDT 流量区域", item.get("traffic_region_id", item.get("region_id", "cn-hongkong")), placeholder="通常和区域 ID 一致")}
+          </div>
+          <div class="credential-grid">
+            {input_field("access_key_id", "阿里云 AccessKey ID", access_key_id, placeholder="粘贴 AccessKey ID", hint="新增时不会自动填入已有密钥。", required=True)}
+            {input_field("access_key_secret", "阿里云 AccessKey Secret", "", "password", placeholder="粘贴 AccessKey Secret", hint=secret_hint or "只在保存时写入配置文件，页面不会回显。", required=not is_edit)}
+          </div>
+        </section>
+        <section class="form-section">
+          <h3 class="form-section-title">流量保护阈值</h3>
+          <div class="credential-grid">
+            {input_field("warning_threshold_gb", "预警阈值 GB", item.get("warning_threshold_gb", 160), "number")}
+            {input_field("stop_threshold_gb", "停机阈值 GB", item.get("stop_threshold_gb", 180), "number")}
+          </div>
+          <div class="credential-grid">
+            {input_field("start_threshold_gb", "恢复启动阈值 GB", item.get("start_threshold_gb", 175), "number")}
+            <div class="mb-3">
+              <label class="form-label">自动保护</label>
+              <label class="form-check form-switch mt-2">
+                <input class="form-check-input" type="checkbox" name="enabled" value="1" {"checked" if item.get("enabled", True) else ""}>
+                <span class="form-check-label">启用自动巡检和启停</span>
+              </label>
+            </div>
+          </div>
+        </section>
+        <section class="form-section">
+          <h3 class="form-section-title">登录备注</h3>
+          <div class="credential-grid">
+            {input_field("panel_url", "服务器登录网站", item.get("panel_url", ""), placeholder="https://example.com/clientarea")}
+            {input_field("panel_username", "登录网站账号", item.get("panel_username", ""))}
+          </div>
+          <div class="credential-grid">
+            {input_field("panel_password", "登录网站密码", "", "password", hint=panel_password_hint)}
+            {input_field("ssh_user", "SSH 用户", item.get("ssh_user", "root"))}
+          </div>
+          <div class="credential-grid">
+            {input_field("ssh_port", "SSH 端口", item.get("ssh_port", 22), "number")}
+            {input_field("ssh_password", "SSH 密码备注", "", "password", hint=panel_password_hint)}
+          </div>
+          <div class="mb-3">
+            <label class="form-label">备注</label>
+            <textarea class="form-control" name="notes" rows="4" placeholder="用途、购买平台、套餐、到期时间、注意事项">{esc(item.get("notes", ""))}</textarea>
+          </div>
+        </section>
       </div>
-      <div class="card-footer text-end">
+      <div class="card-footer d-flex align-items-center gap-2">
+        <div class="submit-feedback"><span class="spinner-dot"></span><span>正在保存配置并立即检查，请稍等...</span></div>
         {f'<a href="/" class="btn me-2">取消编辑</a>' if is_edit else ""}
-        <button class="btn btn-primary" type="submit">保存服务器</button>
+        <button class="btn btn-primary btn-submit ms-auto" type="submit" data-submit-button data-loading-text="正在保存...">保存服务器</button>
       </div>
     </form>
     """
