@@ -149,6 +149,40 @@ def query_billing_cycle_info(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def query_account_balance_info(item: dict[str, Any]) -> dict[str, Any]:
+    last_error = ""
+    for region_id, domain in BSS_ENDPOINTS:
+        try:
+            client = AcsClient(item["access_key_id"], item["access_key_secret"], region_id)
+            request = CommonRequest()
+            request.set_domain(domain)
+            request.set_version("2017-12-14")
+            request.set_action_name("QueryAccountBalance")
+            request.set_method("POST")
+            request.set_accept_format("json")
+            response = client.do_action_with_exception(request)
+            response_json = json.loads(response.decode("utf-8"))
+            data = response_json.get("Data") or {}
+            return {
+                "source": "bss",
+                "source_label": "BSS 账单 API",
+                "available_amount": data.get("AvailableAmount"),
+                "available_cash_amount": data.get("AvailableCashAmount"),
+                "credit_amount": data.get("CreditAmount"),
+                "currency": data.get("Currency"),
+                "endpoint": domain,
+                "region_id": region_id,
+                "request_id": response_json.get("RequestId"),
+            }
+        except Exception as exc:
+            last_error = str(exc)[:500]
+    return {
+        "source": "error",
+        "source_label": "BSS 账单 API",
+        "error": last_error,
+    }
+
+
 def recovery_plan(
     item: dict[str, Any],
     traffic_gb: float | None,
@@ -587,6 +621,7 @@ def run_guard() -> dict[str, Any]:
     client_cache: dict[str, AcsClient] = {}
     traffic_cache: dict[tuple[str, str, str | None], dict[str, Any]] = {}
     billing_cache: dict[str, dict[str, Any]] = {}
+    balance_cache: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
 
@@ -674,6 +709,9 @@ def run_guard() -> dict[str, Any]:
                 if billing_key not in billing_cache:
                     billing_cache[billing_key] = query_billing_cycle_info(item)
                 billing_info = billing_cache[billing_key]
+                if billing_key not in balance_cache:
+                    balance_cache[billing_key] = query_account_balance_info(item)
+                balance_info = balance_cache[billing_key]
                 traffic_gb = float(traffic_report["traffic_gb"])
                 previous_traffic = previous_by_pool.get(pool_key, previous_by_id.get(str(item["id"]), {})).get("traffic_gb")
                 traffic_delta_gb = None
@@ -726,6 +764,8 @@ def run_guard() -> dict[str, Any]:
                         "billing_region_id": billing_info.get("billing_region_id"),
                         "billing_request_id": billing_info.get("billing_request_id"),
                         "billing_error": billing_info.get("billing_error"),
+                        "account_fingerprint": billing_key,
+                        "account_balance": balance_info,
                         "recovery_plan": recovery_plan(item, traffic_gb, ecs_status, action, billing_info),
                     }
                 )
@@ -797,6 +837,30 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         for item in enabled
         if item.get("traffic_pool_key")
     }
+    account_balances = []
+    seen_accounts: set[str] = set()
+    for item in enabled:
+        account_key = str(item.get("account_fingerprint") or "")
+        balance = item.get("account_balance") or {}
+        if not account_key or account_key in seen_accounts or not balance:
+            continue
+        seen_accounts.add(account_key)
+        account_balances.append(
+            {
+                "account_key": account_key,
+                "label": item.get("label") or item.get("id") or account_key,
+                "source": balance.get("source"),
+                "source_label": balance.get("source_label"),
+                "available_amount": balance.get("available_amount"),
+                "available_cash_amount": balance.get("available_cash_amount"),
+                "credit_amount": balance.get("credit_amount"),
+                "currency": balance.get("currency"),
+                "endpoint": balance.get("endpoint"),
+                "region_id": balance.get("region_id"),
+                "request_id": balance.get("request_id"),
+                "error": balance.get("error"),
+            }
+        )
     return {
         "total": len(results),
         "enabled": len(enabled),
@@ -805,6 +869,7 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "errors": len(errors),
         "stopped": len(stopped),
         "actions": len(actions),
+        "account_balances": account_balances,
     }
 
 

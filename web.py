@@ -423,6 +423,7 @@ def selected_instance(config: dict, server_id: str | None) -> dict:
 def flash_message(code: str) -> str:
     messages = {
         "checked": "已完成一次手动检查",
+        "balance_checked": "已查询阿里云账户余额",
         "saved": "服务器已保存并完成一次检查",
         "deleted": "服务器已删除",
         "started": "已提交开机指令，并恢复自动保护",
@@ -2193,12 +2194,25 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
 
 def render_check_action() -> str:
     return """
-    <div>
+    <div class="btn-list">
+      <form class="run-check-form" method="post" action="/balance/run" data-run-check-form>
+        <button class="btn" type="submit" title="马上通过 BSS 账单 API 查询阿里云账户余额" data-run-check-button data-loading-text="正在查询...">查询账户余额</button>
+      </form>
       <form class="run-check-form" method="post" action="/guard/run" data-run-check-form>
         <button class="btn btn-primary" type="submit" title="马上查询 CDT 流量和 ECS 状态，并按阈值执行一次保护判断" data-run-check-button data-loading-text="正在检查...">手动检查流量</button>
       </form>
     </div>
     """
+
+
+def money_text(amount, currency: str | None) -> str:
+    if amount in {None, ""}:
+        return "未知"
+    try:
+        number = float(amount)
+        return f"{number:.2f} {currency or ''}".strip()
+    except (TypeError, ValueError):
+        return f"{amount} {currency or ''}".strip()
 
 
 def render_summary_cards(summary: dict) -> str:
@@ -2219,6 +2233,39 @@ def render_summary_cards(summary: dict) -> str:
       <div class="col-sm-6 col-xl"><div class="card stat-card {stopped_class}"><div class="card-body"><div class="subheader">已停止</div><div class="h1 mb-0">{esc(stopped)}</div><div class="stat-line"><span style="width:{100 if stopped else 18}%; background:#64748b"></span></div></div></div></div>
     </div>
     """
+
+
+def render_balance_overview(summary: dict) -> str:
+    balances = summary.get("account_balances") or []
+    if not balances:
+        return """
+        <div class="card mb-4">
+          <div class="card-body">
+            <div class="subheader">阿里云账户余额</div>
+            <div class="text-secondary small mt-2">暂无余额信息。点击右上角“查询账户余额”后会显示。</div>
+          </div>
+        </div>
+        """
+    cards = []
+    for item in balances:
+        ok = item.get("source") == "bss"
+        cards.append(
+            f"""
+            <div class="col-sm-6 col-xl-4">
+              <div class="card stat-card {'is-danger' if not ok else ''}">
+                <div class="card-body">
+                  <div class="subheader">阿里云账户余额</div>
+                  <div class="h1 mb-1">{esc(money_text(item.get('available_amount'), item.get('currency')) if ok else '查询失败')}</div>
+                  <div class="text-secondary small text-truncate">{esc(item.get('label') or '阿里云账号')}</div>
+                  <div class="text-secondary small mt-2">现金余额：{esc(money_text(item.get('available_cash_amount'), item.get('currency')) if ok else item.get('error') or '请检查 BSS 权限')}</div>
+                  <div class="text-secondary small">来源：{esc(item.get('source_label') or 'BSS 账单 API')} {esc(item.get('region_id') or '')}</div>
+                </div>
+              </div>
+            </div>
+            """
+        )
+    return f'<div class="row row-deck row-cards mb-4">{"".join(cards)}</div>'
+
 
 
 def progress_class(item: dict) -> str:
@@ -2640,7 +2687,7 @@ def render_dashboard(query: dict[str, list[str]] | None = None) -> bytes:
     metadata = config_by_id(config)
     history = read_history(1000)
     flash = query.get("flash", [""])[0]
-    body = render_summary_cards(summary) + render_assets_card(instances, metadata, history)
+    body = render_summary_cards(summary) + render_balance_overview(summary) + render_assets_card(instances, metadata, history)
     return page_shell(
         "overview",
         "CDT 流量保护与服务器资产面板",
@@ -3469,6 +3516,10 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/guard/run":
             run_guard_now()
             self.redirect("/?flash=checked")
+            return
+        if parsed.path == "/balance/run":
+            run_guard_now()
+            self.redirect("/?flash=balance_checked")
             return
         if parsed.path == "/notifications/save":
             save_notifications(fields)

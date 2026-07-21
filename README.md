@@ -315,13 +315,13 @@ Telegram 主动查询命令：
 
 CDT 月度额度保护仍以 CDT 接口为准；EIP 云监控更适合实时趋势、突增提醒和分钟级曲线。
 
-如果要让面板显示真实账期来源，而不是只按配置推算 CDT 重置日，请额外给 RAM 用户增加阿里云系统策略：
+如果要让面板显示真实账期来源和阿里云账户余额，而不是只按配置推算 CDT 重置日，请额外给 RAM 用户增加阿里云系统策略：
 
 ```text
 AliyunBSSReadOnlyAccess
 ```
 
-面板会调用 BSS `QueryBillOverview` 读取当前账期，并自动兼容中国站和国际站 BSS 接入点。
+面板会调用 BSS `QueryBillOverview` 读取当前账期，调用 `QueryAccountBalance` 查询账户余额，并自动兼容中国站和国际站 BSS 接入点。
 
 ## 文件结构
 
