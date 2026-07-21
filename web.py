@@ -128,6 +128,9 @@ def badge(action: str | None) -> str:
     mapping = {
         "stop": ("danger", "已触发停机"),
         "start": ("success", "已触发启动"),
+        "manual_stop": ("danger", "手动关机"),
+        "manual_start": ("success", "手动开机"),
+        "manual_stopped": ("secondary", "手动保持停止"),
         "keep_running": ("success", "保持运行"),
         "keep_stopped": ("secondary", "保持停止"),
         "hold": ("warning", "回差保持"),
@@ -160,6 +163,28 @@ def secret_button(value, label: str = "显示密码") -> str:
     )
 
 
+def power_controls(server_id: str, status: str | None) -> str:
+    status = status or ""
+    can_start = status in {"Stopped"}
+    can_stop = status in {"Running"}
+    start_disabled = "" if can_start else " disabled"
+    stop_disabled = "" if can_stop else " disabled"
+    return f"""
+      <div class="btn-list power-controls">
+        <form method="post" action="/servers/power" onsubmit="return confirm('确认开机这台服务器？开机后会恢复自动保护。')">
+          <input type="hidden" name="id" value="{esc(server_id)}">
+          <input type="hidden" name="action" value="start">
+          <button class="btn btn-sm btn-outline-primary" type="submit"{start_disabled}>开机</button>
+        </form>
+        <form method="post" action="/servers/power" onsubmit="return confirm('确认关机这台服务器？关机后会暂停自动启动，避免被定时任务重新开机。')">
+          <input type="hidden" name="id" value="{esc(server_id)}">
+          <input type="hidden" name="action" value="stop">
+          <button class="btn btn-sm btn-outline-danger" type="submit"{stop_disabled}>关机</button>
+        </form>
+      </div>
+    """
+
+
 def config_by_id(config: dict) -> dict[str, dict]:
     return {
         str(item.get("id") or item.get("instance_id")): item
@@ -181,6 +206,9 @@ def flash_message(code: str) -> str:
         "checked": "已完成一次手动检查",
         "saved": "服务器已保存并完成一次检查",
         "deleted": "服务器已删除",
+        "started": "已提交开机指令，并恢复自动保护",
+        "stopped": "已提交关机指令，自动启动已暂停",
+        "power_failed": "电源操作失败，请查看服务器日志",
     }
     return messages.get(code, code)
 
@@ -384,6 +412,8 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     }}
     .note-cell {{ min-width: 240px; max-width: 340px; white-space: pre-wrap; }}
     .btn-list form {{ display: inline-block; margin: 0; }}
+    .power-controls {{ min-width: 118px; }}
+    .power-controls .btn {{ min-width: 52px; }}
     .form-control, .form-select {{
       border-color: var(--line-strong);
       border-radius: 8px;
@@ -543,6 +573,7 @@ def render_asset_rows(instances: list[dict], metadata: dict[str, dict]) -> str:
                 {secret_button(ssh_password, "显示 SSH 密码") if ssh_password else ""}
               </td>
               <td class="note-cell">{esc(note_text) if note_text else '<span class="text-secondary">未填写</span>'}</td>
+              <td>{power_controls(str(item.get('id')), item.get('instance_status'))}</td>
               <td>
                 <div>{esc(item.get('reason'))}</div>
                 <div class="text-secondary small">{esc(item.get('updated_at'))}</div>
@@ -578,10 +609,10 @@ def render_assets_card(instances: list[dict], metadata: dict[str, dict]) -> str:
         <table class="table table-vcenter card-table">
           <thead>
             <tr>
-              <th>产品/机器</th><th>服务器 IP</th><th>阿里云信息</th><th>状态</th><th>CDT 用量</th><th>额度</th><th>登录信息</th><th>备注</th><th>操作</th>
+              <th>产品/机器</th><th>服务器 IP</th><th>阿里云信息</th><th>状态</th><th>CDT 用量</th><th>额度</th><th>登录信息</th><th>备注</th><th>电源</th><th>操作</th>
             </tr>
           </thead>
-          <tbody>{rows if rows else '<tr><td colspan="9" class="text-secondary">暂无服务器，请先新增。</td></tr>'}</tbody>
+          <tbody>{rows if rows else '<tr><td colspan="10" class="text-secondary">暂无服务器，请先新增。</td></tr>'}</tbody>
         </table>
       </div>
     </div>
@@ -856,6 +887,16 @@ def run_guard_now() -> None:
     )
 
 
+def run_power_action(server_id: str, power_action: str) -> bool:
+    result = subprocess.run(
+        [str(BASE_DIR / "venv/bin/python"), str(BASE_DIR / "guard.py"), "power", server_id, power_action],
+        cwd=str(BASE_DIR),
+        timeout=90,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "AliyunCDTGuard/1.0"
 
@@ -908,6 +949,20 @@ class Handler(BaseHTTPRequestHandler):
             delete_server(form_value(fields, "id"))
             run_guard_now()
             self.redirect("/?flash=deleted")
+            return
+        if parsed.path == "/servers/power":
+            server_id = form_value(fields, "id")
+            power_action = form_value(fields, "action")
+            if power_action not in {"start", "stop"}:
+                self.redirect("/?flash=power_failed")
+                return
+            ok = run_power_action(server_id, power_action)
+            if ok and power_action == "start":
+                self.redirect("/?flash=started")
+            elif ok and power_action == "stop":
+                self.redirect("/?flash=stopped")
+            else:
+                self.redirect("/?flash=power_failed")
             return
         if parsed.path == "/guard/run":
             run_guard_now()

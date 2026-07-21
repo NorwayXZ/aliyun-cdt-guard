@@ -19,6 +19,8 @@ The difference is that servers, AccessKeys, thresholds, account notes and login 
 - Per-server ECS Instance ID, region and CDT traffic region
 - Warning, stop and recovery-start thresholds
 - ECS public/private IP discovery
+- Manual ECS start and stop buttons from the web panel
+- Manual stop pauses automatic restart until the server is manually started again
 - Server product name, provider, panel URL, panel account/password, SSH notes and custom notes
 - Passwords are hidden by default in the UI
 - `systemd` timer checks every minute

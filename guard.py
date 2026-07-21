@@ -211,6 +211,7 @@ def merged_instance(raw: dict[str, Any], defaults: dict[str, Any]) -> dict[str, 
     item["stop_threshold_gb"] = float(item.get("stop_threshold_gb", 180))
     item["start_threshold_gb"] = float(item.get("start_threshold_gb", item["stop_threshold_gb"] - 5))
     item["enabled"] = bool(item.get("enabled", True))
+    item["manual_stop"] = bool(item.get("manual_stop", False))
     item["region_id"] = item.get("region_id") or require_env("ALIYUN_REGION_ID")
     item["traffic_region_id"] = item.get("traffic_region_id") or item["region_id"]
     item["label"] = item.get("label") or item.get("id") or item["instance_id"]
@@ -225,6 +226,10 @@ def decide_action(item: dict[str, Any], traffic_gb: float, ecs_status: str | Non
         return "disabled", "配置已禁用，跳过"
     if ecs_status is None:
         return "error", "查不到实例"
+    if item.get("manual_stop"):
+        if ecs_status in {"Stopped", "Stopping"}:
+            return "manual_stopped", "手动关机保持中，自动启动已暂停"
+        return "stop", "手动关机保持中，执行停止"
 
     stop_threshold = item["stop_threshold_gb"]
     start_threshold = item["start_threshold_gb"]
@@ -271,6 +276,7 @@ def run_guard() -> dict[str, Any]:
                 "id": item["id"],
                 "label": item["label"],
                 "enabled": item["enabled"],
+                "manual_stop": item["manual_stop"],
                 "region_id": region_id,
                 "traffic_region_id": traffic_region_id,
                 "instance_id": item["instance_id"],
@@ -418,6 +424,60 @@ def read_status() -> dict[str, Any] | None:
     return json.loads(STATUS_FILE.read_text(encoding="utf-8"))
 
 
+def find_raw_instance(config: dict[str, Any], server_id: str) -> dict[str, Any] | None:
+    for raw in config.get("instances", []):
+        if str(raw.get("id")) == server_id or str(raw.get("instance_id")) == server_id:
+            return raw
+    return None
+
+
+def manual_power(server_id: str, power_action: str) -> dict[str, Any]:
+    load_env(ENV_FILE)
+    config = load_config()
+    raw = find_raw_instance(config, server_id)
+    if raw is None:
+        raise RuntimeError(f"server not found: {server_id}")
+
+    item = merged_instance(raw, config.get("defaults", {}))
+    client = get_client(item["region_id"], item["access_key_id"], item["access_key_secret"])
+    instance = describe_instance(client, item["instance_id"])
+    if not instance:
+        raise RuntimeError(f"ECS instance not found: {item['instance_id']}")
+
+    status = instance.get("Status")
+    api_response = None
+    if power_action == "start":
+        raw["manual_stop"] = False
+        raw["enabled"] = True
+        if status != "Running":
+            api_response = ecs_start(client, item["instance_id"])
+        action = "manual_start"
+        reason = "手动开机并恢复自动保护"
+    elif power_action == "stop":
+        raw["manual_stop"] = True
+        if status not in {"Stopped", "Stopping"}:
+            api_response = ecs_stop(client, item["instance_id"])
+        action = "manual_stop"
+        reason = "手动关机，自动启动已暂停"
+    else:
+        raise RuntimeError(f"unsupported power action: {power_action}")
+
+    atomic_write_json(CONFIG_FILE, config)
+    event = {
+        "at": iso_now(),
+        "id": item["id"],
+        "label": item["label"],
+        "traffic_gb": None,
+        "status": status,
+        "action": action,
+        "reason": reason,
+        "error": None,
+    }
+    append_history(event)
+    logger.info("%s %s status=%s response=%s", item["id"], action, status, api_response)
+    return event
+
+
 def print_status(as_json: bool = False) -> int:
     status = read_status()
     if not status:
@@ -446,6 +506,9 @@ def main() -> int:
     subparsers.add_parser("run")
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("--json", action="store_true")
+    power_parser = subparsers.add_parser("power")
+    power_parser.add_argument("server_id")
+    power_parser.add_argument("action", choices=["start", "stop"])
     args = parser.parse_args()
 
     if args.command in {None, "run"}:
@@ -453,6 +516,10 @@ def main() -> int:
         return 0
     if args.command == "status":
         return print_status(as_json=args.json)
+    if args.command == "power":
+        manual_power(args.server_id, args.action)
+        run_guard()
+        return 0
     parser.print_help()
     return 1
 
