@@ -503,6 +503,11 @@ def flash_message(code: str) -> str:
         "domain_apply_write_failed": "写入 Caddy 配置失败，请确认面板以 root 权限运行",
         "domain_apply_restart_failed": "Caddy 配置已写入，但重启失败，请检查域名 DNS 和 80/443 端口",
         "domain_apply_failed": "应用 Caddy 反代失败，请检查域名 DNS 是否指向本机、公网 80/443 是否放行",
+        "security_current_failed": "当前密码不正确，未修改账号设置",
+        "security_password_mismatch": "两次输入的新密码不一致",
+        "security_password_short": "新密码至少需要 8 位",
+        "security_username_empty": "用户名不能为空",
+        "security_saved": "账号密码已修改，请使用新账号重新登录",
         "login_required": "请先登录",
         "login_failed": "用户名或密码不正确",
         "logged_out": "已退出登录",
@@ -512,6 +517,8 @@ def flash_message(code: str) -> str:
 
 def flash_class(code: str) -> str:
     if code.startswith("domain_apply_") and code != "domain_applied":
+        return "alert-danger"
+    if code.startswith("security_") and code != "security_saved":
         return "alert-danger"
     if code.endswith("_failed") or code in {"login_failed", "telegram_discover_failed"}:
         return "alert-danger"
@@ -751,6 +758,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
         ("/logs", "logs", "服务器日志"),
         ("/notifications", "notifications", "通知设置"),
         ("/domain", "domain", "域名反代"),
+        ("/security", "security", "账号安全"),
     ]
     nav_html = "".join(
         f'<li class="nav-item {"active" if key == active else ""}"><a class="nav-link" href="{href}"><span class="nav-link-title">{label}</span></a></li>'
@@ -3879,6 +3887,103 @@ def service_state(service: str) -> str:
         return "unknown"
 
 
+def render_security_page(query: dict[str, list[str]] | None = None) -> bytes:
+    query = query or {}
+    username, _, env = web_credentials()
+    cookie_secure = env.get("WEB_COOKIE_SECURE", "").lower() in {"1", "true", "yes"}
+    session_ttl = env.get("WEB_SESSION_TTL", "86400")
+    body = f"""
+    <div class="form-layout">
+      <form class="card save-form" method="post" action="/security/save" data-save-form>
+        <div class="card-header">
+          <h3 class="card-title">修改登录账号</h3>
+        </div>
+        <div class="card-body">
+          <div class="setup-box">
+            这里修改的是面板登录账号，不会影响阿里云 AccessKey、服务器 SSH 密码备注或通知配置。保存成功后会自动退出登录，需要用新账号重新进入。
+          </div>
+          <section class="form-section">
+            <h3 class="form-section-title">账号信息</h3>
+            <div class="credential-grid">
+              {input_field("username", "登录用户名", username, placeholder="admin", required=True)}
+              {input_field("current_password", "当前密码", "", "password", placeholder="输入当前登录密码", required=True)}
+            </div>
+          </section>
+          <section class="form-section">
+            <h3 class="form-section-title">修改密码</h3>
+            <div class="credential-grid">
+              {input_field("new_password", "新密码", "", "password", placeholder="至少 8 位", hint="留空则只修改用户名，不修改密码。")}
+              {input_field("confirm_password", "确认新密码", "", "password", placeholder="再次输入新密码")}
+            </div>
+          </section>
+        </div>
+        <div class="card-footer d-flex align-items-center gap-2">
+          <div class="submit-feedback"><span class="spinner-dot"></span><span>正在保存账号设置...</span></div>
+          <button class="btn btn-primary btn-submit ms-auto" type="submit" data-submit-button data-loading-text="正在保存...">保存账号设置</button>
+        </div>
+      </form>
+
+      <aside class="card guide-panel">
+        <div class="card-header"><h3 class="card-title">当前安全状态</h3></div>
+        <div class="card-body">
+          <div class="guide-step">
+            <strong>当前用户名</strong>
+            <span>{esc(username)}</span>
+          </div>
+          <div class="guide-step">
+            <strong>Cookie 安全</strong>
+            <span>{'已开启 Secure Cookie，适合 HTTPS 域名访问。' if cookie_secure else '未开启 Secure Cookie；如果已经通过 HTTPS 域名访问，建议在域名反代应用后开启。'}</span>
+          </div>
+          <div class="guide-step">
+            <strong>会话有效期</strong>
+            <span>{esc(session_ttl)} 秒。修改账号或密码后，旧会话会立即失效。</span>
+          </div>
+          <div class="guide-step">
+            <strong>配置文件</strong>
+            <span>/opt/aliyun-cdt-guard/web.env</span>
+          </div>
+        </div>
+      </aside>
+    </div>
+    """
+    return page_shell(
+        "security",
+        "账号安全",
+        "修改面板登录用户名和密码",
+        body,
+        actions='<a href="/" class="btn">返回总览</a>',
+        flash=query.get("flash", [""])[0],
+        auto_refresh=False,
+    )
+
+
+def save_security_settings(fields: dict[str, list[str]]) -> tuple[bool, str]:
+    _, password, _ = web_credentials()
+    current_password = form_value(fields, "current_password")
+    new_username = form_value(fields, "username").strip()
+    new_password = form_value(fields, "new_password")
+    confirm_password = form_value(fields, "confirm_password")
+
+    if not hmac.compare_digest(current_password, password):
+        return False, "current_failed"
+    if not new_username:
+        return False, "username_empty"
+    if new_password or confirm_password:
+        if new_password != confirm_password:
+            return False, "password_mismatch"
+        if len(new_password) < 8:
+            return False, "password_short"
+
+    updates = {
+        "WEB_USERNAME": new_username,
+        "WEB_SESSION_SECRET": secrets.token_urlsafe(32),
+    }
+    if new_password:
+        updates["WEB_PASSWORD"] = new_password
+    update_web_env(updates)
+    return True, "saved"
+
+
 def render_domain_page(query: dict[str, list[str]] | None = None) -> bytes:
     query = query or {}
     config = read_domain_proxy_config()
@@ -4579,6 +4684,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/domain":
             self.send_bytes(render_domain_page(query), "text/html; charset=utf-8")
             return
+        if parsed.path == "/security":
+            self.send_bytes(render_security_page(query), "text/html; charset=utf-8")
+            return
         if parsed.path == "/api/status":
             self.send_json(read_json(STATUS_FILE, {"error": "status not found"}))
             return
@@ -4652,6 +4760,18 @@ class Handler(BaseHTTPRequestHandler):
             ok, reason = apply_caddy_proxy()
             flash = "domain_applied" if ok else f"domain_apply_{reason}"
             self.redirect(f"/domain?flash={flash}")
+            return
+        if parsed.path == "/security/save":
+            ok, reason = save_security_settings(fields)
+            if ok:
+                self.send_response(HTTPStatus.SEE_OTHER)
+                self.send_header("Location", "/login?flash=security_saved")
+                self.send_header("Set-Cookie", clear_session_cookie())
+                self.send_header("Set-Cookie", clear_logout_marker_cookie())
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+            else:
+                self.redirect(f"/security?flash=security_{reason}")
             return
         if parsed.path == "/notifications/test":
             result = notifications.send_test_message()

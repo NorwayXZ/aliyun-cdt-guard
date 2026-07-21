@@ -16,6 +16,7 @@ Aliyun CDT Guard 是一个自托管的阿里云 ECS / CDT 流量保护面板。
 
 - Tabler 风格网页面板
 - 正式登录页，不再依赖浏览器 Basic Auth 弹窗
+- 支持在网页面板内修改登录用户名和密码
 - 网页添加/编辑阿里云服务器
 - 每台服务器可独立保存 AccessKey ID / Secret
 - 支持 ECS Instance ID、区域、CDT 流量区域
@@ -114,6 +115,8 @@ WEB_COOKIE_SECURE=true
 ```bash
 sudo systemctl restart cdt-guard-web.service
 ```
+
+也可以登录面板后进入 `账号安全`，直接修改登录用户名和密码。保存成功后会自动退出登录，需要使用新账号重新进入。
 
 ## 域名反代
 
