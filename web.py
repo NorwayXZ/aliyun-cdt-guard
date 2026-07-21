@@ -3316,28 +3316,28 @@ def render_form_guide() -> str:
       <div class="card-header"><h3 class="card-title">填写说明</h3></div>
       <div class="card-body">
         <div class="guide-step">
-          <strong>1. 先填识别信息</strong>
-          <span>产品名和服务器 IP 是给你自己看的，建议写成能一眼认出来的名字。</span>
+          <strong>1. 新增只填核心信息</strong>
+          <span>产品名、Instance ID、区域和 AccessKey 是必须的；服务器 IP 建议填写，方便识别是哪台机器。</span>
         </div>
         <div class="guide-step">
-          <strong>2. 填 ECS 实例信息</strong>
-          <span>Instance ID 和区域 ID 必须和阿里云 ECS 控制台里显示的一致，例如 cn-hongkong。</span>
+          <strong>2. 其他信息后期补</strong>
+          <span>别名、服务商、登录网站、SSH、备注都可以保存后再编辑，不影响第一次巡检。</span>
         </div>
         <div class="guide-step">
           <strong>3. 填 AccessKey</strong>
           <span>这里不会自动带入任何密钥。请填写这台服务器所属阿里云账号或 RAM 用户的 AccessKey ID 和 Secret。</span>
         </div>
         <div class="guide-step">
-          <strong>4. 选择 CDT 流量池</strong>
-          <span>如果一个阿里云账号下多台非中国内地服务器共享 200G/220G CDT，把它们设成同一个“账号非中国内地共享池”。</span>
+          <strong>4. 阈值可先用默认</strong>
+          <span>默认预警 160GB、停机 180GB、恢复 175GB；以后可以按自己的账号额度再微调。</span>
         </div>
         <div class="guide-step">
-          <strong>5. 设置阈值</strong>
-          <span>达到停机阈值会自动关机；低于恢复启动阈值时才会再次启动，用来避免临界值反复开关。</span>
+          <strong>5. 共享池放高级设置</strong>
+          <span>如果多台机器共用同一个 CDT 额度，再展开“高级设置”选择共享池和流量池 ID。</span>
         </div>
         <div class="guide-step">
-          <strong>6. 设置恢复时间</strong>
-          <span>CDT 通常按自然月重置，默认每月 1 日。面板会据此显示预计多少天后可恢复开机。</span>
+          <strong>6. 账期优先走 BSS</strong>
+          <span>已授权 BSS 后，面板会用账单 API 判断真实账期；每月重置日只是备用推算。</span>
         </div>
         <div class="guide-step">
           <strong>7. 保存后的反应</strong>
@@ -3357,32 +3357,55 @@ def render_form(item: dict) -> str:
     secret_hint = "编辑时留空则保留原 Secret 或继续使用全局配置。" if is_edit else ""
     panel_password_hint = "编辑时留空则保留原密码" if is_edit else ""
     current_scope = item.get("traffic_scope", TRAFFIC_SCOPE_REGION)
+    advanced_open = " open" if is_edit else ""
     return f"""
     <form class="card save-form" method="post" action="/servers/save" data-save-form>
       <div class="card-header"><h3 class="card-title">{title}</h3></div>
       <div class="card-body">
         <input type="hidden" name="original_id" value="{esc(id_value)}">
         <section class="form-section">
-          <h3 class="form-section-title">基础识别</h3>
-          {input_field("product_name", "产品自定义名字", item.get("product_name", ""), placeholder="例如：阿里云香港 1号机", required=True)}
-          <div class="credential-grid">
-            {input_field("label", "服务器别名", item.get("label", ""), placeholder="例如：HK-01")}
-            {input_field("provider", "服务商", item.get("provider", "阿里云"))}
+          <h3 class="form-section-title">必填信息</h3>
+          <div class="setup-box">
+            新增服务器只需要先填能完成巡检的核心信息：产品名、实例 ID、区域和阿里云 AccessKey。别名、登录备注、SSH 等可以保存后再编辑补充。
           </div>
+          {input_field("product_name", "产品自定义名字", item.get("product_name", ""), placeholder="例如：阿里云香港 1号机", required=True)}
           <div class="credential-grid">
             {input_field("server_ip", "服务器 IP", first_value(item.get("server_ip"), item.get("public_ip")), placeholder="例如：154.83.98.194")}
             {input_field("instance_id", "ECS Instance ID", item.get("instance_id", ""), placeholder="例如：i-j6ceg1880o7i5vxdpeq4", required=True)}
           </div>
-        </section>
-        <section class="form-section">
-          <h3 class="form-section-title">阿里云凭证与区域</h3>
           <div class="credential-grid">
             {input_field("region_id", "区域 ID", item.get("region_id", "cn-hongkong"), placeholder="例如：cn-hongkong", required=True)}
-            {input_field("traffic_region_id", "CDT 流量区域", item.get("traffic_region_id", item.get("region_id", "cn-hongkong")), placeholder="例如：cn-hongkong", hint="选择“按当前 CDT 区域统计”时使用；共享池模式下用于备注和兼容旧配置。")}
+            {input_field("access_key_id", "阿里云 AccessKey ID", access_key_id, placeholder="粘贴 AccessKey ID", hint=access_key_hint, required=not is_edit)}
+          </div>
+          {input_field("access_key_secret", "阿里云 AccessKey Secret", "", "password", placeholder="粘贴 AccessKey Secret", hint=secret_hint or "只在保存时写入配置文件，页面不会回显。", required=not is_edit)}
+        </section>
+        <section class="form-section">
+          <h3 class="form-section-title">推荐保护设置</h3>
+          <div class="credential-grid">
+            {input_field("warning_threshold_gb", "预警阈值 GB", item.get("warning_threshold_gb", 160), "number")}
+            {input_field("stop_threshold_gb", "停机阈值 GB", item.get("stop_threshold_gb", 180), "number")}
           </div>
           <div class="credential-grid">
-            {input_field("access_key_id", "阿里云 AccessKey ID", access_key_id, placeholder="粘贴 AccessKey ID", hint=access_key_hint, required=not is_edit)}
-            {input_field("access_key_secret", "阿里云 AccessKey Secret", "", "password", placeholder="粘贴 AccessKey Secret", hint=secret_hint or "只在保存时写入配置文件，页面不会回显。", required=not is_edit)}
+            {input_field("start_threshold_gb", "恢复启动阈值 GB", item.get("start_threshold_gb", 175), "number")}
+            <div class="mb-3">
+              <label class="form-label">自动保护</label>
+              <label class="form-check form-switch mt-2">
+                <input class="form-check-input" type="checkbox" name="enabled" value="1" {"checked" if item.get("enabled", True) else ""}>
+                <span class="form-check-label">启用自动巡检和启停</span>
+              </label>
+              <div class="form-hint">默认开启。达到停机阈值会自动关机，低于恢复阈值才会再次启动。</div>
+            </div>
+          </div>
+        </section>
+        <details class="form-section detail-disclosure"{advanced_open}>
+          <summary>高级设置</summary>
+          <div class="credential-grid mt-3">
+            {input_field("label", "服务器别名", item.get("label", ""), placeholder="例如：HK-01", hint="可选；留空会使用产品自定义名字。")}
+            {input_field("provider", "服务商", item.get("provider", "阿里云"))}
+          </div>
+          <div class="credential-grid">
+            {input_field("traffic_region_id", "CDT 流量区域", item.get("traffic_region_id", "") if is_edit else "", placeholder="默认跟随区域 ID，例如 cn-hongkong", hint="留空会自动跟随区域 ID；共享池模式下只用于备注和兼容旧配置。")}
+            {input_field("traffic_reset_day", "CDT 每月重置日", item.get("traffic_reset_day", 1), "number", hint="BSS 账单 API 不可用时才作为备用推算。通常填 1。")}
           </div>
           <div class="credential-grid">
             {select_field("traffic_scope", "CDT 统计方式", current_scope, [
@@ -3392,30 +3415,12 @@ def render_form(item: dict) -> str:
             ], "香港、日本、新加坡等机器共享同一账号额度时，建议选“账号非中国内地共享池”。")}
             {input_field("traffic_pool_id", "流量池 ID", item.get("traffic_pool_id", ""), placeholder="例如：global-200g 或 hk-account-pool", hint="同一账号共享额度的机器填同一个 ID；留空会自动生成默认池。")}
           </div>
-        </section>
-        <section class="form-section">
-          <h3 class="form-section-title">流量保护阈值</h3>
-          <div class="credential-grid">
-            {input_field("warning_threshold_gb", "预警阈值 GB", item.get("warning_threshold_gb", 160), "number")}
-            {input_field("stop_threshold_gb", "停机阈值 GB", item.get("stop_threshold_gb", 180), "number")}
+        </details>
+        <details class="form-section detail-disclosure"{advanced_open}>
+          <summary>登录备注</summary>
+          <div class="setup-box mt-3">
+            这些只是给你自己看的资产备注，不影响阿里云巡检和自动启停，可以保存服务器后再补。
           </div>
-          <div class="credential-grid">
-            {input_field("start_threshold_gb", "恢复启动阈值 GB", item.get("start_threshold_gb", 175), "number")}
-            {input_field("traffic_reset_day", "CDT 每月重置日", item.get("traffic_reset_day", 1), "number", hint="BSS 账单 API 不可用时才作为备用推算。通常填 1，表示每月 1 日重置。")}
-          </div>
-          <div class="credential-grid">
-            <div class="mb-3">
-              <label class="form-label">自动保护</label>
-              <label class="form-check form-switch mt-2">
-                <input class="form-check-input" type="checkbox" name="enabled" value="1" {"checked" if item.get("enabled", True) else ""}>
-                <span class="form-check-label">启用自动巡检和启停</span>
-              </label>
-            </div>
-            <div></div>
-          </div>
-        </section>
-        <section class="form-section">
-          <h3 class="form-section-title">登录备注</h3>
           <div class="credential-grid">
             {input_field("panel_url", "服务器登录网站", item.get("panel_url", ""), placeholder="https://example.com/clientarea")}
             {input_field("panel_username", "登录网站账号", item.get("panel_username", ""))}
@@ -3432,7 +3437,7 @@ def render_form(item: dict) -> str:
             <label class="form-label">备注</label>
             <textarea class="form-control" name="notes" rows="4" placeholder="用途、购买平台、套餐、到期时间、注意事项">{esc(item.get("notes", ""))}</textarea>
           </div>
-        </section>
+        </details>
       </div>
       <div class="card-footer d-flex align-items-center gap-2">
         <div class="submit-feedback"><span class="spinner-dot"></span><span>正在保存配置并立即检查，请稍等...</span></div>
