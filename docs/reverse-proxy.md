@@ -42,7 +42,7 @@ https://cdt.example.com
 - 备份 `/etc/caddy/Caddyfile`
 - 写入当前域名的反代配置
 - 重启 Caddy
-- 写入 `WEB_COOKIE_SECURE=true`
+- 写入 `WEB_COOKIE_SECURE=true`，让 HTTPS 域名使用 Secure Cookie，同时保留 HTTP 源站 IP 的临时登录能力
 
 Cloudflare 如果开启橙色云，DNS 查询结果会显示 Cloudflare 节点 IP，而不是源站 IP，这是正常现象。
 
@@ -145,11 +145,13 @@ CDT_GUARD_HOST=127.0.0.1
 CDT_GUARD_PORT=8787
 ```
 
-如果你确认以后只通过 HTTPS 域名访问，也可以加：
+如果你已经配置 HTTPS 域名访问，也可以加：
 
 ```env
 WEB_COOKIE_SECURE=true
 ```
+
+这会启用自动模式：HTTPS 域名登录使用 Secure Cookie；临时访问 `http://服务器IP:8787` 时不会加 Secure，避免 HTTP 源站无法保持登录。
 
 重启：
 

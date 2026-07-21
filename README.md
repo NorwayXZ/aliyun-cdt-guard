@@ -104,11 +104,13 @@ WEB_PASSWORD=安装时随机生成
 WEB_SESSION_SECRET=安装时随机生成
 ```
 
-如果面板只通过 HTTPS 反代访问，可以在 `web.env` 里增加：
+如果面板已经配置 HTTPS 反代，可以在 `web.env` 里增加：
 
 ```env
 WEB_COOKIE_SECURE=true
 ```
+
+这会启用自动模式：通过 HTTPS 域名登录时使用 Secure Cookie；临时通过 `http://服务器IP:8787` 登录时不会加 Secure，方便应急访问。
 
 修改密码后重启：
 

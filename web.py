@@ -550,11 +550,20 @@ def sign_session(username: str, expires: str, nonce: str, secret: bytes) -> str:
     return hmac.new(secret, payload, hashlib.sha256).hexdigest()
 
 
-def build_session_cookie(username: str, env: dict[str, str], password: str) -> str:
+def should_use_secure_cookie(env: dict[str, str], request_is_https: bool) -> bool:
+    mode = env.get("WEB_COOKIE_SECURE", "").lower()
+    if mode in {"always", "force"}:
+        return True
+    if mode in {"1", "true", "yes", "auto"}:
+        return request_is_https
+    return False
+
+
+def build_session_cookie(username: str, env: dict[str, str], password: str, secure_cookie: bool = False) -> str:
     expires = str(int(time.time()) + int(env.get("WEB_SESSION_TTL", "86400")))
     nonce = secrets.token_hex(12)
     signature = sign_session(username, expires, nonce, session_secret(env, password))
-    secure = "; Secure" if env.get("WEB_COOKIE_SECURE", "").lower() in {"1", "true", "yes"} else ""
+    secure = "; Secure" if secure_cookie else ""
     return f"cdt_guard_session={username}|{expires}|{nonce}|{signature}; Path=/; HttpOnly; SameSite=Lax{secure}"
 
 
@@ -3948,7 +3957,13 @@ def service_state(service: str) -> str:
 def render_security_page(query: dict[str, list[str]] | None = None) -> bytes:
     query = query or {}
     username, _, env = web_credentials()
-    cookie_secure = env.get("WEB_COOKIE_SECURE", "").lower() in {"1", "true", "yes"}
+    cookie_secure_mode = env.get("WEB_COOKIE_SECURE", "").lower()
+    if cookie_secure_mode in {"1", "true", "yes", "auto"}:
+        cookie_text = "自动模式：HTTPS 域名登录会启用 Secure Cookie，HTTP 源站 IP 登录不会启用。"
+    elif cookie_secure_mode in {"always", "force"}:
+        cookie_text = "强制 Secure Cookie：只适合纯 HTTPS 访问，HTTP 源站 IP 无法保持登录。"
+    else:
+        cookie_text = "未启用 Secure Cookie；建议通过 HTTPS 域名访问后开启自动模式。"
     session_ttl = env.get("WEB_SESSION_TTL", "86400")
     body = f"""
     <div class="form-layout">
@@ -3990,7 +4005,7 @@ def render_security_page(query: dict[str, list[str]] | None = None) -> bytes:
           </div>
           <div class="guide-step">
             <strong>Cookie 安全</strong>
-            <span>{'已开启 Secure Cookie，适合 HTTPS 域名访问。' if cookie_secure else '未开启 Secure Cookie；如果已经通过 HTTPS 域名访问，建议在域名反代应用后开启。'}</span>
+            <span>{esc(cookie_text)}</span>
           </div>
           <div class="guide-step">
             <strong>会话有效期</strong>
@@ -4189,7 +4204,7 @@ server {{
           </div>
           <div class="guide-step">
             <strong>3. 修改 Cookie 安全项</strong>
-            <span>确认域名 HTTPS 可访问后，在 web.env 里开启 WEB_COOKIE_SECURE=true 并重启面板。</span>
+            <span>确认域名 HTTPS 可访问后，WEB_COOKIE_SECURE=true 会进入自动模式：HTTPS 域名使用 Secure Cookie，HTTP 源站 IP 仍可临时登录。</span>
           </div>
           <div class="guide-step">
             <strong>4. 收紧源站端口</strong>
@@ -4873,6 +4888,13 @@ class Handler(BaseHTTPRequestHandler):
         expected = sign_session(supplied_user, expires, nonce, session_secret(env, password))
         return hmac.compare_digest(signature, expected)
 
+    def is_https_request(self) -> bool:
+        forwarded_proto = self.headers.get("X-Forwarded-Proto", "")
+        if forwarded_proto.split(",", 1)[0].strip().lower() == "https":
+            return True
+        forwarded = self.headers.get("Forwarded", "").lower()
+        return "proto=https" in forwarded
+
     def handle_login(self, fields: dict[str, list[str]]) -> None:
         username, password, env = web_credentials()
         supplied_user = form_value(fields, "username")
@@ -4880,7 +4902,8 @@ class Handler(BaseHTTPRequestHandler):
         if password and hmac.compare_digest(supplied_user, username) and hmac.compare_digest(supplied_password, password):
             self.send_response(HTTPStatus.SEE_OTHER)
             self.send_header("Location", "/")
-            self.send_header("Set-Cookie", build_session_cookie(username, env, password))
+            secure_cookie = should_use_secure_cookie(env, self.is_https_request())
+            self.send_header("Set-Cookie", build_session_cookie(username, env, password, secure_cookie))
             self.send_header("Set-Cookie", clear_logout_marker_cookie())
             self.end_headers()
             return
