@@ -66,6 +66,12 @@ Web panel:
 curl -fsSL https://raw.githubusercontent.com/NorwayXZ/aliyun-cdt-guard/main/install.sh | sudo WEB_PORT=9000 bash
 ```
 
+如果安装时遇到 `Could not get lock /var/lib/dpkg/lock-frontend`，通常是系统正在自动更新。新版安装脚本会默认等待 apt/dpkg 锁释放，最多等待 300 秒。也可以延长等待时间：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NorwayXZ/aliyun-cdt-guard/main/install.sh | sudo APT_LOCK_WAIT_SECONDS=600 bash
+```
+
 ## 一键卸载
 
 ```bash

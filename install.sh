@@ -16,11 +16,63 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+apt_lock_holder() {
+  local lock_path="$1"
+  if need_cmd fuser; then
+    fuser "$lock_path" 2>/dev/null | tr ' ' '\n' | sed '/^$/d' | head -n 1
+  fi
+}
+
+wait_for_apt_locks() {
+  local waited=0
+  local max_wait="${APT_LOCK_WAIT_SECONDS:-300}"
+  local locks=(
+    /var/lib/dpkg/lock-frontend
+    /var/lib/dpkg/lock
+    /var/lib/apt/lists/lock
+    /var/cache/apt/archives/lock
+  )
+
+  while true; do
+    local holder=""
+    local lock=""
+    for lock in "${locks[@]}"; do
+      if [ -e "$lock" ]; then
+        holder="$(apt_lock_holder "$lock" || true)"
+        if [ -n "$holder" ]; then
+          break
+        fi
+      fi
+    done
+
+    if [ -z "$holder" ]; then
+      return 0
+    fi
+
+    if [ "$waited" -ge "$max_wait" ]; then
+      echo "APT/dpkg is still locked by process $holder after ${max_wait}s."
+      ps -fp "$holder" || true
+      echo "Please wait for the other apt process to finish, then rerun the installer."
+      exit 1
+    fi
+
+    echo "APT/dpkg is locked by process $holder. Waiting... (${waited}s/${max_wait}s)"
+    ps -fp "$holder" || true
+    sleep 5
+    waited=$((waited + 5))
+  done
+}
+
+apt_run() {
+  wait_for_apt_locks
+  apt-get -o DPkg::Lock::Timeout="${APT_LOCK_WAIT_SECONDS:-300}" "$@"
+}
+
 install_packages() {
   if need_cmd apt-get; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -y
-    apt-get install -y python3 python3-venv python3-pip git curl openssl cron ca-certificates
+    apt_run update -y
+    apt_run install -y python3 python3-venv python3-pip git curl openssl cron ca-certificates psmisc
   elif need_cmd dnf; then
     dnf install -y python3 python3-pip git curl openssl
   elif need_cmd yum; then
