@@ -1104,6 +1104,63 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       overflow-x: visible;
       overflow-y: auto;
     }}
+    .server-group {{
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      min-width: 980px;
+    }}
+    .server-group-head {{
+      align-items: center;
+      background: #fbfcff;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(260px, 1fr) auto;
+      padding: 12px 14px;
+    }}
+    .server-group-title {{
+      color: #111827;
+      font-size: 14px;
+      font-weight: 780;
+      line-height: 1.3;
+    }}
+    .server-group-sub {{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      margin-top: 3px;
+    }}
+    .server-group-metrics {{
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+    }}
+    .server-group-pill {{
+      background: #eef2f6;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: #42526b;
+      font-size: 11px;
+      font-weight: 730;
+      line-height: 1;
+      padding: 6px 9px;
+      white-space: nowrap;
+    }}
+    .server-group-pill.is-danger {{
+      background: #fff0f0;
+      border-color: #f3b5b5;
+      color: #b42323;
+    }}
+    .server-group-pill.is-warning {{
+      background: #fff7e6;
+      border-color: #f4d18b;
+      color: #9a6700;
+    }}
+    .server-group-body {{
+      display: grid;
+    }}
     .server-list-head,
     .server-row {{
       display: grid;
@@ -1945,6 +2002,12 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       .asset-toolbar {{ align-items: flex-start; flex-direction: column; }}
       .asset-workspace {{ padding: 10px; }}
       .server-list-head {{ display: none; }}
+      .server-group {{ min-width: 0; }}
+      .server-group-head {{
+        grid-template-columns: 1fr;
+        padding: 12px;
+      }}
+      .server-group-metrics {{ justify-content: flex-start; }}
       .server-row {{
         gap: 10px;
         grid-template-columns: 1fr;
@@ -2058,6 +2121,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       const board = document.querySelector("[data-asset-board]");
       if (!board) return;
       const rows = Array.from(board.querySelectorAll("[data-server-row]"));
+      const groups = Array.from(board.querySelectorAll("[data-server-group]"));
       const search = board.querySelector("[data-asset-search]");
       const filter = board.querySelector("[data-asset-filter]");
       const sort = board.querySelector("[data-asset-sort]");
@@ -2079,13 +2143,28 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       function applyFilters() {{
         const q = (search?.value || "").trim().toLowerCase();
         const state = filter?.value || "all";
-        const ordered = rows.slice().sort((a, b) => {{
-          const mode = sort?.value || "health";
+        const mode = sort?.value || "health";
+        const compareRows = (a, b) => {{
           if (mode === "traffic") return Number(b.dataset.used || 0) - Number(a.dataset.used || 0);
           if (mode === "name") return (a.dataset.name || "").localeCompare(b.dataset.name || "", "zh-Hans-CN");
           return Number(a.dataset.priority || 9) - Number(b.dataset.priority || 9);
+        }};
+        const compareGroups = (a, b) => {{
+          if (mode === "traffic") return Number(b.dataset.groupUsed || 0) - Number(a.dataset.groupUsed || 0);
+          if (mode === "name") return (a.dataset.groupName || "").localeCompare(b.dataset.groupName || "", "zh-Hans-CN");
+          return Number(a.dataset.groupPriority || 9) - Number(b.dataset.groupPriority || 9);
+        }};
+        const orderedGroups = groups.slice().sort(compareGroups);
+        orderedGroups.forEach((group) => list.appendChild(group));
+        groups.forEach((group) => {{
+          const body = group.querySelector("[data-server-group-body]");
+          if (!body) return;
+          Array.from(body.querySelectorAll("[data-server-row]")).sort(compareRows).forEach((row) => body.appendChild(row));
         }});
-        ordered.forEach((row) => list.appendChild(row));
+        const ordered = groups.length ? orderedGroups.flatMap((group) => Array.from(group.querySelectorAll("[data-server-row]"))) : rows.slice().sort(compareRows);
+        if (!groups.length) {{
+          ordered.forEach((row) => list.appendChild(row));
+        }}
 
         let visible = 0;
         let firstVisible = null;
@@ -2098,6 +2177,13 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
             visible += 1;
             firstVisible ||= row;
           }}
+        }});
+        groups.forEach((group) => {{
+          const groupRows = Array.from(group.querySelectorAll("[data-server-row]"));
+          const groupVisible = groupRows.filter((row) => !row.hidden).length;
+          group.hidden = groupVisible === 0;
+          const groupCount = group.querySelector("[data-group-visible-count]");
+          if (groupCount) groupCount.textContent = groupVisible;
         }});
         if (count) count.textContent = visible;
         if (empty) empty.hidden = visible !== 0;
@@ -2463,6 +2549,74 @@ def render_server_account_balance(item: dict) -> str:
         <span class="account-key text-truncate">{esc(account_label)}</span>
         <span class="account-balance-pill is-warning">余额未查询</span>
       </span>
+    """
+
+
+def account_group_key(item: dict) -> str:
+    return str(item.get("account_fingerprint") or item.get("traffic_pool_key") or item.get("region_id") or "unknown")
+
+
+def account_group_title(group_key: str) -> str:
+    if group_key == "unknown":
+        return "未识别阿里云账号"
+    return f"阿里云账号 {group_key}"
+
+
+def group_balance_summary(items: list[dict]) -> tuple[str, str]:
+    for item in items:
+        balance = item.get("account_balance") or {}
+        if balance.get("source") == "bss":
+            amount = money_text(balance.get("available_amount"), balance.get("currency"))
+            return amount, balance_amount_level(balance.get("available_amount"))
+        if balance.get("source") == "error":
+            return "余额查询失败", "is-danger"
+    return "余额未查询", "is-warning"
+
+
+def group_scope_summary(items: list[dict]) -> str:
+    labels = []
+    for item in items:
+        label = str(item.get("traffic_scope_label") or traffic_scope_label(item.get("traffic_scope")))
+        if label not in labels:
+            labels.append(label)
+    if not labels:
+        return "统计池未知"
+    if len(labels) == 1:
+        return labels[0]
+    return "多个统计池"
+
+
+def render_server_group(group_key: str, items: list[dict], metadata: dict[str, dict], history: list[dict], active_id: str | None) -> str:
+    priorities = [server_health(item)[2] for item in items]
+    group_priority = min(priorities) if priorities else 9
+    total_traffic = sum(as_float(item.get("traffic_gb"), 0) for item in items if item.get("traffic_gb") is not None)
+    balance_text, balance_level = group_balance_summary(items)
+    scope_text = group_scope_summary(items)
+    regions = sorted({str(item.get("region_id") or "") for item in items if item.get("region_id")})
+    region_text = "、".join(regions[:3]) + (" 等" if len(regions) > 3 else "")
+    group_name = account_group_title(group_key)
+    rows = "".join(
+        render_server_row(item, metadata, history, active=str(item.get("id") or item.get("instance_id")) == active_id)
+        for item in items
+    )
+    return f"""
+      <section class="server-group" data-server-group data-group-priority="{group_priority}" data-group-used="{total_traffic:.4f}" data-group-name="{esc(group_name.lower())}">
+        <div class="server-group-head">
+          <div>
+            <div class="server-group-title">{esc(group_name)}</div>
+            <div class="server-group-sub">
+              <span data-group-visible-count>{len(items)}</span> / {len(items)} 台 · {esc(scope_text)}{f' · {esc(region_text)}' if region_text else ''}
+            </div>
+          </div>
+          <div class="server-group-metrics">
+            <span class="server-group-pill">合计 {fmt_gb(total_traffic)}</span>
+            <span class="server-group-pill {balance_level}">余额 {esc(balance_text)}</span>
+          </div>
+        </div>
+        <div class="server-group-body" data-server-group-body>
+          {rows}
+        </div>
+      </section>
     """
 
 
@@ -2850,11 +3004,26 @@ def render_server_detail(item: dict, metadata: dict[str, dict], active: bool = F
 
 def render_assets_card(instances: list[dict], metadata: dict[str, dict], history: list[dict]) -> str:
     sorted_instances = sorted(instances, key=lambda item: (server_health(item)[2], -used_percent(item), str(item.get("label") or "")))
-    rows = []
+    groups: dict[str, list[dict]] = {}
     details = []
+    active_id = None
     for index, item in enumerate(sorted_instances):
-        rows.append(render_server_row(item, metadata, history, active=index == 0))
+        identity = server_identity(item, metadata)
+        if index == 0:
+            active_id = identity["id"]
+        groups.setdefault(account_group_key(item), []).append(item)
         details.append(render_server_detail(item, metadata, active=index == 0))
+    group_html = "".join(
+        render_server_group(group_key, group_items, metadata, history, active_id)
+        for group_key, group_items in sorted(
+            groups.items(),
+            key=lambda pair: (
+                min(server_health(item)[2] for item in pair[1]),
+                -sum(as_float(item.get("traffic_gb"), 0) for item in pair[1] if item.get("traffic_gb") is not None),
+                account_group_title(pair[0]),
+            ),
+        )
+    )
     return f"""
     <div class="card" id="servers" data-asset-board>
       <div class="card-header">
@@ -2888,10 +3057,10 @@ def render_assets_card(instances: list[dict], metadata: dict[str, dict], history
             <div>状态</div><div>服务器</div><div>IP</div><div>区域</div><div>CDT 用量</div><div>动作</div>
           </div>
           <div class="server-list" data-server-list>
-            {''.join(rows)}
+            {group_html}
           </div>
           <div class="empty-state" data-empty-state hidden>没有符合条件的服务器</div>
-          {'' if rows else '<div class="empty-state">暂无服务器，请到“新增/编辑”添加第一台。</div>'}
+          {'' if group_html else '<div class="empty-state">暂无服务器，请到“新增/编辑”添加第一台。</div>'}
         </div>
         <aside class="server-detail-panel">
           {''.join(details) if details else '<div class="empty-state">选择一台服务器查看详情。</div>'}
