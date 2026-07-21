@@ -17,6 +17,7 @@ The difference is that servers, AccessKeys, thresholds, account notes and login 
 - Add and edit Aliyun servers from the browser
 - Per-server AccessKey ID and AccessKey Secret
 - Per-server ECS Instance ID, region and CDT traffic region
+- CDT traffic pool mode for one account shared by multiple non-mainland servers
 - Warning, stop and recovery-start thresholds
 - ECS public/private IP discovery
 - Manual ECS start and stop buttons from the web panel
@@ -61,6 +62,11 @@ Open the web panel and fill:
 - Aliyun AccessKey Secret
 - Region ID, for example `cn-hongkong`
 - CDT traffic region, for example `cn-hongkong`
+- CDT scope:
+  - `按当前 CDT 区域统计`: only one CDT business region, compatible with older configs
+  - `账号非中国内地共享池`: Hong Kong, Japan, Singapore, US, Europe and other non-mainland regions under the same Aliyun account
+  - `账号全部 CDT 流量`: all CDT traffic returned by the account
+- Traffic pool ID, for example `global-200g`; use the same pool ID for servers sharing the same CDT quota
 - ECS Instance ID, for example `i-xxxxxxxx`
 - Warning threshold, for example `160`
 - Stop threshold, for example `180`
@@ -68,6 +74,24 @@ Open the web panel and fill:
 - Provider login website, username, password and notes if needed
 
 After saving, the panel immediately runs one check.
+
+## Shared CDT Pool Strategy
+
+If one Aliyun account owns several ECS instances and they share one monthly CDT quota, protect the quota as an account traffic pool instead of treating each server separately.
+
+Recommended setup for Hong Kong, Japan and other non-mainland ECS instances sharing a 200GB/220GB CDT allowance:
+
+```text
+CDT scope       = 账号非中国内地共享池
+Traffic pool ID = global-200g
+warning         = 160
+stop            = 180
+start           = 175
+```
+
+Every enabled server in the same pool sees the same pool usage. When the pool reaches the stop threshold, each server in that pool follows the stop policy. After the next monthly reset, if the pool drops below the recovery-start threshold, stopped servers can be started again unless they were manually stopped from the panel.
+
+If the same Aliyun account uses multiple RAM AccessKeys, give those servers the same custom Traffic pool ID. If they are different Aliyun accounts, use different pool IDs so their quotas are not mixed.
 
 ## Threshold Logic
 

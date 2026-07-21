@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import argparse
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -26,6 +27,14 @@ HISTORY_FILE = BASE_DIR / "history.jsonl"
 LOCK_FILE = BASE_DIR / "guard.lock"
 MAX_HISTORY_DAYS = int(os.environ.get("CDT_GUARD_HISTORY_DAYS", "31"))
 MAX_HISTORY_LINES = int(os.environ.get("CDT_GUARD_MAX_HISTORY_LINES", "200000"))
+TRAFFIC_SCOPE_REGION = "region"
+TRAFFIC_SCOPE_ACCOUNT_NON_CHINA = "account_non_china"
+TRAFFIC_SCOPE_ACCOUNT_ALL = "account_all"
+TRAFFIC_SCOPES = {
+    TRAFFIC_SCOPE_REGION,
+    TRAFFIC_SCOPE_ACCOUNT_NON_CHINA,
+    TRAFFIC_SCOPE_ACCOUNT_ALL,
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,6 +86,7 @@ def load_config() -> dict[str, Any]:
                 "stop_threshold_gb": legacy_stop,
                 "start_threshold_gb": max(legacy_stop - 5, 0),
                 "traffic_region_id": legacy_traffic_region,
+                "traffic_scope": TRAFFIC_SCOPE_REGION,
             },
             "instances": [
                 {
@@ -84,6 +94,7 @@ def load_config() -> dict[str, Any]:
                     "label": "香港 launch-advisor",
                     "region_id": legacy_region_id,
                     "traffic_region_id": legacy_traffic_region,
+                    "traffic_scope": TRAFFIC_SCOPE_REGION,
                     "instance_id": legacy_instance_id,
                     "enabled": True,
                 }
@@ -159,7 +170,84 @@ def bytes_to_gb(value: int | str | None) -> float:
     return int(value or 0) / (1024 ** 3)
 
 
-def get_traffic_report(client: AcsClient, traffic_region_id: str | None = None) -> dict[str, Any]:
+def normalize_traffic_scope(value: str | None) -> str:
+    value = (value or TRAFFIC_SCOPE_REGION).strip()
+    return value if value in TRAFFIC_SCOPES else TRAFFIC_SCOPE_REGION
+
+
+def traffic_scope_label(scope: str) -> str:
+    labels = {
+        TRAFFIC_SCOPE_REGION: "按当前 CDT 区域统计",
+        TRAFFIC_SCOPE_ACCOUNT_NON_CHINA: "账号非中国内地共享池",
+        TRAFFIC_SCOPE_ACCOUNT_ALL: "账号全部 CDT 流量",
+    }
+    return labels.get(scope, labels[TRAFFIC_SCOPE_REGION])
+
+
+def is_china_mainland_region(region_id: str | None) -> bool:
+    region_id = str(region_id or "").strip().lower()
+    return region_id.startswith("cn-") and region_id != "cn-hongkong"
+
+
+def credential_fingerprint(access_key_id: str | None) -> str:
+    digest = hashlib.sha1(str(access_key_id or "").encode("utf-8")).hexdigest()
+    return digest[:10]
+
+
+def default_traffic_pool_id(scope: str, traffic_region_id: str | None) -> str:
+    if scope == TRAFFIC_SCOPE_ACCOUNT_NON_CHINA:
+        return "cdt-account-non-china"
+    if scope == TRAFFIC_SCOPE_ACCOUNT_ALL:
+        return "cdt-account-all"
+    return f"cdt-region-{traffic_region_id or 'all'}"
+
+
+def traffic_pool_id(item: dict[str, Any]) -> str:
+    scope = normalize_traffic_scope(item.get("traffic_scope"))
+    return str(item.get("traffic_pool_id") or default_traffic_pool_id(scope, item.get("traffic_region_id")))
+
+
+def has_custom_traffic_pool_id(item: dict[str, Any]) -> bool:
+    return bool(str(item.get("traffic_pool_id") or "").strip())
+
+
+def traffic_pool_key(item: dict[str, Any]) -> str:
+    scope = normalize_traffic_scope(item.get("traffic_scope"))
+    pool_id = traffic_pool_id(item)
+    is_custom = item.get("traffic_pool_custom", has_custom_traffic_pool_id(item))
+    if is_custom:
+        return f"custom:{scope}:{pool_id}"
+    return f"{credential_fingerprint(item.get('access_key_id'))}:{scope}:{pool_id}"
+
+
+def traffic_cache_key(item: dict[str, Any]) -> tuple[str, str, str | None]:
+    scope = normalize_traffic_scope(item.get("traffic_scope"))
+    traffic_region_id = item.get("traffic_region_id") if scope == TRAFFIC_SCOPE_REGION else None
+    credential_key = traffic_pool_key(item) if item.get("traffic_pool_custom") else credential_fingerprint(item.get("access_key_id"))
+    return (credential_key, scope, traffic_region_id)
+
+
+def traffic_pool_label(item: dict[str, Any]) -> str:
+    return f"{traffic_scope_label(normalize_traffic_scope(item.get('traffic_scope')))} / {traffic_pool_id(item)}"
+
+
+def include_traffic_detail(detail: dict[str, Any], scope: str, traffic_region_id: str | None) -> bool:
+    business_region = detail.get("BusinessRegionId")
+    if scope == TRAFFIC_SCOPE_ACCOUNT_ALL:
+        return True
+    if scope == TRAFFIC_SCOPE_ACCOUNT_NON_CHINA:
+        return not is_china_mainland_region(business_region)
+    if traffic_region_id:
+        return business_region == traffic_region_id
+    return True
+
+
+def get_traffic_report(
+    client: AcsClient,
+    traffic_region_id: str | None = None,
+    traffic_scope: str = TRAFFIC_SCOPE_REGION,
+) -> dict[str, Any]:
+    traffic_scope = normalize_traffic_scope(traffic_scope)
     request = CommonRequest()
     request.set_domain("cdt.aliyuncs.com")
     request.set_version("2021-08-13")
@@ -170,13 +258,10 @@ def get_traffic_report(client: AcsClient, traffic_region_id: str | None = None) 
     response = client.do_action_with_exception(request)
     response_json = json.loads(response.decode("utf-8"))
     all_details = response_json.get("TrafficDetails", [])
-    traffic_details = all_details
-
-    if traffic_region_id:
-        traffic_details = [
-            item for item in traffic_details
-            if item.get("BusinessRegionId") == traffic_region_id
-        ]
+    traffic_details = [
+        item for item in all_details
+        if include_traffic_detail(item, traffic_scope, traffic_region_id)
+    ]
 
     total_bytes = sum(int(item.get("Traffic", 0) or 0) for item in traffic_details)
     products: dict[str, int] = {}
@@ -207,6 +292,8 @@ def get_traffic_report(client: AcsClient, traffic_region_id: str | None = None) 
 
     return {
         "request_id": response_json.get("RequestId"),
+        "traffic_scope": traffic_scope,
+        "traffic_scope_label": traffic_scope_label(traffic_scope),
         "traffic_bytes": total_bytes,
         "traffic_gb": bytes_to_gb(total_bytes),
         "detail_count": len(all_details),
@@ -286,10 +373,15 @@ def merged_instance(raw: dict[str, Any], defaults: dict[str, Any]) -> dict[str, 
     item["manual_stop"] = bool(item.get("manual_stop", False))
     item["region_id"] = item.get("region_id") or require_env("ALIYUN_REGION_ID")
     item["traffic_region_id"] = item.get("traffic_region_id") or item["region_id"]
+    item["traffic_scope"] = normalize_traffic_scope(item.get("traffic_scope"))
+    item["traffic_pool_custom"] = has_custom_traffic_pool_id(item)
+    item["traffic_pool_id"] = traffic_pool_id(item)
     item["label"] = item.get("label") or item.get("id") or item["instance_id"]
     item["id"] = item.get("id") or item["instance_id"]
     item["access_key_id"] = item.get("access_key_id") or os.environ.get("ALIYUN_ACCESS_KEY_ID", "")
     item["access_key_secret"] = item.get("access_key_secret") or os.environ.get("ALIYUN_ACCESS_KEY_SECRET", "")
+    item["traffic_pool_key"] = traffic_pool_key(item)
+    item["traffic_pool_label"] = traffic_pool_label(item)
     return item
 
 
@@ -326,14 +418,25 @@ def run_guard() -> dict[str, Any]:
     raw_instances = config.get("instances", [])
     if not raw_instances:
         raise RuntimeError("instances.json has no instances")
+    merged_instances = [merged_instance(raw, defaults) for raw in raw_instances]
+    pool_member_counts: dict[str, int] = {}
+    for item in merged_instances:
+        if item.get("enabled"):
+            pool_key = item["traffic_pool_key"]
+            pool_member_counts[pool_key] = pool_member_counts.get(pool_key, 0) + 1
 
     previous_status = read_status() or {}
     previous_by_id = {
         str(item.get("id")): item
         for item in previous_status.get("instances", [])
     }
+    previous_by_pool = {
+        str(item.get("traffic_pool_key")): item
+        for item in previous_status.get("instances", [])
+        if item.get("traffic_pool_key") and item.get("traffic_gb") is not None
+    }
     client_cache: dict[str, AcsClient] = {}
-    traffic_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
+    traffic_cache: dict[tuple[str, str, str | None], dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
 
@@ -344,11 +447,12 @@ def run_guard() -> dict[str, Any]:
             logger.info("another guard run is still active; skipping")
             return read_status() or {"generated_at": iso_now(), "skipped": True, "instances": []}
 
-        for raw in raw_instances:
-            item = merged_instance(raw, defaults)
+        for item in merged_instances:
             region_id = item["region_id"]
             traffic_region_id = item["traffic_region_id"]
-            key = (region_id, traffic_region_id, item["access_key_id"])
+            traffic_scope = item["traffic_scope"]
+            pool_key = item["traffic_pool_key"]
+            key = traffic_cache_key(item)
             result = {
                 "id": item["id"],
                 "label": item["label"],
@@ -356,6 +460,12 @@ def run_guard() -> dict[str, Any]:
                 "manual_stop": item["manual_stop"],
                 "region_id": region_id,
                 "traffic_region_id": traffic_region_id,
+                "traffic_scope": traffic_scope,
+                "traffic_scope_label": traffic_scope_label(traffic_scope),
+                "traffic_pool_id": item["traffic_pool_id"],
+                "traffic_pool_key": pool_key,
+                "traffic_pool_label": item["traffic_pool_label"],
+                "traffic_pool_member_count": pool_member_counts.get(pool_key, 0),
                 "instance_id": item["instance_id"],
                 "warning_threshold_gb": item["warning_threshold_gb"],
                 "start_threshold_gb": item["start_threshold_gb"],
@@ -389,6 +499,10 @@ def run_guard() -> dict[str, Any]:
                             "id": result["id"],
                             "label": result["label"],
                             "traffic_gb": None,
+                            "traffic_scope": result.get("traffic_scope"),
+                            "traffic_pool_id": result.get("traffic_pool_id"),
+                            "traffic_pool_key": result.get("traffic_pool_key"),
+                            "traffic_pool_label": result.get("traffic_pool_label"),
                             "status": result.get("instance_status"),
                             "action": result.get("action"),
                             "reason": result.get("reason"),
@@ -402,10 +516,10 @@ def run_guard() -> dict[str, Any]:
                     get_client(region_id, item["access_key_id"], item["access_key_secret"]),
                 )
                 if key not in traffic_cache:
-                    traffic_cache[key] = get_traffic_report(client, traffic_region_id)
+                    traffic_cache[key] = get_traffic_report(client, traffic_region_id, traffic_scope)
                 traffic_report = traffic_cache[key]
                 traffic_gb = float(traffic_report["traffic_gb"])
-                previous_traffic = previous_by_id.get(str(item["id"]), {}).get("traffic_gb")
+                previous_traffic = previous_by_pool.get(pool_key, previous_by_id.get(str(item["id"]), {})).get("traffic_gb")
                 traffic_delta_gb = None
                 if previous_traffic is not None:
                     traffic_delta_gb = traffic_gb - float(previous_traffic)
@@ -431,6 +545,8 @@ def run_guard() -> dict[str, Any]:
                         "traffic_gb": traffic_gb,
                         "traffic_delta_gb": traffic_delta_gb,
                         "traffic_request_id": traffic_report.get("request_id"),
+                        "traffic_scope": traffic_report.get("traffic_scope", traffic_scope),
+                        "traffic_scope_label": traffic_report.get("traffic_scope_label", traffic_scope_label(traffic_scope)),
                         "traffic_detail_count": traffic_report.get("detail_count"),
                         "traffic_matched_detail_count": traffic_report.get("matched_detail_count"),
                         "traffic_products": traffic_report.get("products", []),
@@ -447,7 +563,7 @@ def run_guard() -> dict[str, Any]:
                         "api_response": api_response,
                     }
                 )
-                logger.info("%s %s traffic=%.4fGB status=%s action=%s", item["id"], traffic_region_id, traffic_gb, ecs_status, action)
+                logger.info("%s %s traffic=%.4fGB status=%s action=%s", item["id"], item["traffic_pool_label"], traffic_gb, ecs_status, action)
             except Exception as exc:
                 result.update(
                     {
@@ -472,6 +588,10 @@ def run_guard() -> dict[str, Any]:
                     "label": result["label"],
                     "traffic_gb": result.get("traffic_gb"),
                     "traffic_delta_gb": result.get("traffic_delta_gb"),
+                    "traffic_scope": result.get("traffic_scope"),
+                    "traffic_pool_id": result.get("traffic_pool_id"),
+                    "traffic_pool_key": result.get("traffic_pool_key"),
+                    "traffic_pool_label": result.get("traffic_pool_label"),
                     "traffic_products": result.get("traffic_products"),
                     "status": result.get("instance_status"),
                     "action": result.get("action"),
@@ -499,9 +619,15 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     warnings = [item for item in results if item.get("warning")]
     stopped = [item for item in results if item.get("instance_status") == "Stopped"]
     actions = [item for item in results if item.get("action") in {"start", "stop"}]
+    pools = {
+        str(item.get("traffic_pool_key"))
+        for item in enabled
+        if item.get("traffic_pool_key")
+    }
     return {
         "total": len(results),
         "enabled": len(enabled),
+        "pools": len(pools),
         "warnings": len(warnings),
         "errors": len(errors),
         "stopped": len(stopped),
@@ -559,6 +685,10 @@ def manual_power(server_id: str, power_action: str) -> dict[str, Any]:
         "id": item["id"],
         "label": item["label"],
         "traffic_gb": None,
+        "traffic_scope": item.get("traffic_scope"),
+        "traffic_pool_id": item.get("traffic_pool_id"),
+        "traffic_pool_key": item.get("traffic_pool_key"),
+        "traffic_pool_label": item.get("traffic_pool_label"),
         "status": status,
         "action": action,
         "reason": reason,
@@ -581,12 +711,13 @@ def print_status(as_json: bool = False) -> int:
 
     summary = status.get("summary", {})
     print(f"更新时间：{status.get('generated_at')}")
-    print(f"机器：{summary.get('enabled', 0)}/{summary.get('total', 0)} 启用，预警 {summary.get('warnings', 0)}，错误 {summary.get('errors', 0)}")
+    print(f"机器：{summary.get('enabled', 0)}/{summary.get('total', 0)} 启用，流量池 {summary.get('pools', 0)}，预警 {summary.get('warnings', 0)}，错误 {summary.get('errors', 0)}")
     for item in status.get("instances", []):
         traffic = item.get("traffic_gb")
         traffic_text = "未知" if traffic is None else f"{traffic:.4f} GB"
         print(
             f"- {item.get('label')} | {item.get('instance_status')} | "
+            f"{item.get('traffic_pool_label', item.get('traffic_region_id'))} | "
             f"{traffic_text}/{item.get('stop_threshold_gb')} GB | {item.get('action')} | {item.get('reason')}"
         )
     return 0

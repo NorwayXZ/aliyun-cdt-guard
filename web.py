@@ -17,6 +17,14 @@ WEB_ENV_FILE = BASE_DIR / "web.env"
 CONFIG_FILE = BASE_DIR / "instances.json"
 STATUS_FILE = BASE_DIR / "status.json"
 HISTORY_FILE = BASE_DIR / "history.jsonl"
+TRAFFIC_SCOPE_REGION = "region"
+TRAFFIC_SCOPE_ACCOUNT_NON_CHINA = "account_non_china"
+TRAFFIC_SCOPE_ACCOUNT_ALL = "account_all"
+TRAFFIC_SCOPE_LABELS = {
+    TRAFFIC_SCOPE_REGION: "按当前 CDT 区域统计",
+    TRAFFIC_SCOPE_ACCOUNT_NON_CHINA: "账号非中国内地共享池",
+    TRAFFIC_SCOPE_ACCOUNT_ALL: "账号全部 CDT 流量",
+}
 
 
 def load_env(path: Path) -> dict[str, str]:
@@ -61,6 +69,7 @@ def read_config() -> dict:
                 "stop_threshold_gb": 180,
                 "start_threshold_gb": 175,
                 "traffic_region_id": "cn-hongkong",
+                "traffic_scope": TRAFFIC_SCOPE_REGION,
             },
             "instances": [],
         },
@@ -92,11 +101,13 @@ def parse_event_time(value: str | None) -> datetime | None:
     return parsed
 
 
-def read_traffic_series(server_id: str, days: int) -> dict:
+def read_traffic_series(server_id: str, days: int, pool_key: str = "") -> dict:
     days = max(1, min(days, 31))
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     points = []
     previous_traffic = None
+    previous_point_time = None
+    previous_point_traffic = None
 
     if HISTORY_FILE.exists():
         for line in HISTORY_FILE.read_text(encoding="utf-8").splitlines():
@@ -104,7 +115,10 @@ def read_traffic_series(server_id: str, days: int) -> dict:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if str(event.get("id")) != server_id:
+            if pool_key:
+                if str(event.get("traffic_pool_key") or "") != pool_key:
+                    continue
+            elif str(event.get("id")) != server_id:
                 continue
             event_time = parse_event_time(event.get("at"))
             if event_time is None or event_time < cutoff:
@@ -126,6 +140,12 @@ def read_traffic_series(server_id: str, days: int) -> dict:
             if delta_gb is None:
                 delta_gb = 0
             previous_traffic = traffic_gb
+            if pool_key and previous_point_time is not None and previous_point_traffic is not None:
+                seconds = abs((event_time - previous_point_time).total_seconds())
+                if seconds <= 300 and abs(traffic_gb - previous_point_traffic) < 0.000001:
+                    continue
+            previous_point_time = event_time
+            previous_point_traffic = traffic_gb
             points.append(
                 {
                     "at": event.get("at"),
@@ -139,6 +159,7 @@ def read_traffic_series(server_id: str, days: int) -> dict:
     total_delta = sum(float(point.get("delta_gb") or 0) for point in points)
     return {
         "server_id": server_id,
+        "traffic_pool_key": pool_key,
         "days": days,
         "points": points,
         "total_delta_gb": total_delta,
@@ -184,6 +205,25 @@ def fmt_delta(value) -> str:
         return "暂无变化数据"
     sign = "+" if number > 0 else ""
     return f"{sign}{number:.2f} GB"
+
+
+def traffic_scope_label(scope: str | None) -> str:
+    return TRAFFIC_SCOPE_LABELS.get(scope or TRAFFIC_SCOPE_REGION, TRAFFIC_SCOPE_LABELS[TRAFFIC_SCOPE_REGION])
+
+
+def traffic_pool_text(item: dict) -> str:
+    pool_id = item.get("traffic_pool_id") or item.get("traffic_region_id") or "默认池"
+    return f"{traffic_scope_label(item.get('traffic_scope'))} / {pool_id}"
+
+
+def traffic_pool_badge(item: dict) -> str:
+    scope = item.get("traffic_scope") or TRAFFIC_SCOPE_REGION
+    count = int(item.get("traffic_pool_member_count") or 0)
+    if scope == TRAFFIC_SCOPE_REGION:
+        return f"区域池 · {esc(item.get('traffic_region_id') or '未设置')}"
+    if count > 1:
+        return f"共享池 · {count} 台机器"
+    return "账号池 · 单台机器"
 
 
 def form_value(fields: dict[str, list[str]], name: str, default: str = "") -> str:
@@ -723,6 +763,16 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     .traffic-delta.up {{ background: var(--warning-soft); color: #b7791f; }}
     .traffic-delta.flat {{ background: #eef2f6; color: #64748b; }}
     .traffic-delta.down {{ background: var(--success-soft); color: #148341; }}
+    .pool-chip {{
+      background: #eef2f6;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: #475569;
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 720;
+      padding: 5px 8px;
+    }}
     .breakdown-list {{
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -1274,6 +1324,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     }}
     const trafficChart = {{
       serverId: "",
+      poolKey: "",
       serverName: "",
       days: 1,
       points: []
@@ -1305,7 +1356,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
         empty.classList.add("show");
       }}
       if (table) table.innerHTML = '<tr><td colspan="4" class="text-secondary">正在加载...</td></tr>';
-      const data = await requestJson(`/api/traffic?server=${{trafficChart.serverId}}&days=${{trafficChart.days}}`);
+      const data = await requestJson(`/api/traffic?server=${{encodeURIComponent(trafficChart.serverId)}}&pool=${{encodeURIComponent(trafficChart.poolKey)}}&days=${{trafficChart.days}}`);
       trafficChart.points = data.points || [];
       renderTrafficChart(data);
     }}
@@ -1434,9 +1485,10 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
           event.preventDefault();
           event.stopPropagation();
           trafficChart.serverId = button.dataset.serverId || "";
+          trafficChart.poolKey = button.dataset.chartPool || "";
           trafficChart.serverName = button.dataset.serverName || trafficChart.serverId;
           trafficChart.days = 1;
-          document.querySelector("[data-chart-server]").textContent = trafficChart.serverName;
+          document.querySelector("[data-chart-server]").textContent = trafficChart.poolKey ? (trafficChart.serverName + " · 按流量池统计") : trafficChart.serverName;
           document.querySelectorAll("[data-days]").forEach((tab) => tab.classList.toggle("active", tab.dataset.days === "1"));
           setModalOpen(true);
           loadTrafficChart().catch(() => renderTrafficChart({{ points: [], point_count: 0, days: trafficChart.days, total_delta_gb: 0 }}));
@@ -1482,6 +1534,7 @@ def render_summary_cards(summary: dict) -> str:
     warnings = int(summary.get("warnings", 0) or 0)
     errors = int(summary.get("errors", 0) or 0)
     stopped = int(summary.get("stopped", 0) or 0)
+    pools = int(summary.get("pools", 0) or 0)
     warning_class = "is-warning" if warnings else "is-muted"
     error_class = "is-danger" if errors else "is-muted"
     stopped_class = "is-danger" if stopped else "is-muted"
@@ -1489,6 +1542,7 @@ def render_summary_cards(summary: dict) -> str:
     <div class="row row-deck row-cards mb-4">
       <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">总机器</div><div class="h1 mb-0">{esc(summary.get('total', 0))}</div><div class="stat-line"><span style="width:100%"></span></div></div></div></div>
       <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">启用保护</div><div class="h1 mb-0">{esc(summary.get('enabled', 0))}</div><div class="stat-line"><span style="width:70%"></span></div></div></div></div>
+      <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">流量池</div><div class="h1 mb-0">{esc(pools)}</div><div class="stat-line"><span style="width:{min(100, max(18, pools * 25))}%"></span></div></div></div></div>
       <div class="col-sm-6 col-xl"><div class="card stat-card {warning_class}"><div class="card-body"><div class="subheader">流量预警</div><div class="h1 mb-0 text-yellow">{esc(warnings)}</div><div class="stat-line"><span style="width:{100 if warnings else 18}%; background:#f59f00"></span></div></div></div></div>
       <div class="col-sm-6 col-xl"><div class="card stat-card {error_class}"><div class="card-body"><div class="subheader">检查错误</div><div class="h1 mb-0 text-red">{esc(errors)}</div><div class="stat-line"><span style="width:{100 if errors else 18}%; background:#d63939"></span></div></div></div></div>
       <div class="col-sm-6 col-xl"><div class="card stat-card {stopped_class}"><div class="card-body"><div class="subheader">已停止</div><div class="h1 mb-0">{esc(stopped)}</div><div class="stat-line"><span style="width:{100 if stopped else 18}%; background:#64748b"></span></div></div></div></div>
@@ -1644,8 +1698,9 @@ def render_traffic_breakdown(item: dict) -> str:
     total = item.get("traffic_detail_count")
     count_line = ""
     if matched is not None and total is not None:
-        count_line = f'<div class="text-secondary small mt-2">区域匹配 {esc(matched)} / {esc(total)} 条明细</div>'
-    return f'<div class="breakdown-list">{"".join(rows)}</div>{count_line}{request_line}'
+        count_line = f'<div class="text-secondary small mt-2">CDT 明细匹配 {esc(matched)} / {esc(total)} 条</div>'
+    scope_line = f'<div class="text-secondary small mt-2">统计范围：{esc(traffic_pool_text(item))}</div>'
+    return f'<div class="breakdown-list">{"".join(rows)}</div>{scope_line}{count_line}{request_line}'
 
 
 def render_server_row(item: dict, metadata: dict[str, dict], history: list[dict], active: bool = False) -> str:
@@ -1662,6 +1717,8 @@ def render_server_row(item: dict, metadata: dict[str, dict], history: list[dict]
             str(item.get("instance_id") or ""),
             str(item.get("region_id") or ""),
             str(item.get("traffic_region_id") or ""),
+            str(item.get("traffic_pool_id") or ""),
+            str(item.get("traffic_scope_label") or traffic_scope_label(item.get("traffic_scope"))),
             str(item.get("instance_name") or ""),
         ]
     ).lower()
@@ -1696,9 +1753,10 @@ def render_server_row(item: dict, metadata: dict[str, dict], history: list[dict]
               <span class="text-secondary small">{pct:.0f}%</span>
             </span>
             <span class="progress"><span class="progress-bar {progress_class(item)}" style="width:{pct:.2f}%"></span></span>
+            <span class="asset-sub d-block mt-1">{traffic_pool_badge(item)}</span>
             <span class="asset-sub d-block mt-1">{esc(fmt_delta(item.get('traffic_delta_gb')))}</span>
             {sparkline_svg(traffic_values(identity['id'], history, item.get('traffic_gb')))}
-            <button class="chart-trigger" type="button" data-chart-trigger data-server-id="{esc(identity['id'])}" data-server-name="{esc(identity['product_name'])}">查看曲线</button>
+            <button class="chart-trigger" type="button" data-chart-trigger data-server-id="{esc(identity['id'])}" data-chart-pool="{esc(item.get('traffic_pool_key') or '')}" data-server-name="{esc(identity['product_name'])}">查看曲线</button>
           </span>
         </span>
         <span class="server-cell">
@@ -1756,8 +1814,9 @@ def render_server_detail(item: dict, metadata: dict[str, dict], active: bool = F
             <span>剩余 {fmt_gb(item.get('remaining_gb'))}</span>
             <span>{pct:.0f}% 已用</span>
           </div>
+          <div class="pool-chip mt-2">{esc(traffic_pool_badge(item))}</div>
           <div class="mt-2">{traffic_delta_badge(item.get('traffic_delta_gb'))}</div>
-          <button class="chart-trigger" type="button" data-chart-trigger data-server-id="{esc(identity['id'])}" data-server-name="{esc(identity['product_name'])}">查看 1天/3天/7天/1个月曲线</button>
+          <button class="chart-trigger" type="button" data-chart-trigger data-server-id="{esc(identity['id'])}" data-chart-pool="{esc(item.get('traffic_pool_key') or '')}" data-server-name="{esc(identity['product_name'])}">查看 1天/3天/7天/1个月曲线</button>
         </div>
         <div class="detail-section">
           <div class="info-label">CDT 计费明细</div>
@@ -1786,6 +1845,12 @@ def render_server_detail(item: dict, metadata: dict[str, dict], active: bool = F
               <div class="info-label">区域</div>
               <div class="info-value">{esc(item.get('region_id'))}</div>
               <div class="text-secondary small">CDT {esc(item.get('traffic_region_id'))}</div>
+            </div>
+            <div class="detail-item">
+              <div class="info-label">CDT 流量池</div>
+              <div class="info-value">{esc(item.get('traffic_pool_id') or '默认池')}</div>
+              <div class="text-secondary small">{esc(item.get('traffic_scope_label') or traffic_scope_label(item.get('traffic_scope')))}</div>
+              <div class="text-secondary small">池内启用机器 {esc(item.get('traffic_pool_member_count') or 0)} 台</div>
             </div>
             <div class="detail-item">
               <div class="info-label">保护阈值</div>
@@ -2029,6 +2094,21 @@ def input_field(name: str, label: str, value="", field_type: str = "text", place
     )
 
 
+def select_field(name: str, label: str, value: str, options: list[tuple[str, str]], hint: str = "") -> str:
+    hint_html = f'<div class="form-hint">{esc(hint)}</div>' if hint else ""
+    option_html = "".join(
+        f'<option value="{esc(option_value)}" {"selected" if option_value == value else ""}>{esc(option_label)}</option>'
+        for option_value, option_label in options
+    )
+    return (
+        '<div class="mb-3">'
+        f'<label class="form-label">{esc(label)}</label>'
+        f'<select class="form-select" name="{esc(name)}">{option_html}</select>'
+        f'{hint_html}'
+        '</div>'
+    )
+
+
 def render_form_guide() -> str:
     return """
     <aside class="card guide-panel">
@@ -2047,11 +2127,15 @@ def render_form_guide() -> str:
           <span>这里不会自动带入任何密钥。请填写这台服务器所属阿里云账号或 RAM 用户的 AccessKey ID 和 Secret。</span>
         </div>
         <div class="guide-step">
-          <strong>4. 设置阈值</strong>
+          <strong>4. 选择 CDT 流量池</strong>
+          <span>如果一个阿里云账号下多台非中国内地服务器共享 200G/220G CDT，把它们设成同一个“账号非中国内地共享池”。</span>
+        </div>
+        <div class="guide-step">
+          <strong>5. 设置阈值</strong>
           <span>达到停机阈值会自动关机；低于恢复启动阈值时才会再次启动，用来避免临界值反复开关。</span>
         </div>
         <div class="guide-step">
-          <strong>5. 保存后的反应</strong>
+          <strong>6. 保存后的反应</strong>
           <span>点击保存后会立即写入配置并做一次检查，按钮会进入等待状态，完成后回到总览页。</span>
         </div>
       </div>
@@ -2067,6 +2151,7 @@ def render_form(item: dict) -> str:
     access_key_hint = "编辑时留空则保留原 AccessKey ID 或继续使用全局配置。" if is_edit else "新增时不会自动填入已有密钥。"
     secret_hint = "编辑时留空则保留原 Secret 或继续使用全局配置。" if is_edit else ""
     panel_password_hint = "编辑时留空则保留原密码" if is_edit else ""
+    current_scope = item.get("traffic_scope", TRAFFIC_SCOPE_REGION)
     return f"""
     <form class="card save-form" method="post" action="/servers/save" data-save-form>
       <div class="card-header"><h3 class="card-title">{title}</h3></div>
@@ -2088,11 +2173,19 @@ def render_form(item: dict) -> str:
           <h3 class="form-section-title">阿里云凭证与区域</h3>
           <div class="credential-grid">
             {input_field("region_id", "区域 ID", item.get("region_id", "cn-hongkong"), placeholder="例如：cn-hongkong", required=True)}
-            {input_field("traffic_region_id", "CDT 流量区域", item.get("traffic_region_id", item.get("region_id", "cn-hongkong")), placeholder="通常和区域 ID 一致")}
+            {input_field("traffic_region_id", "CDT 流量区域", item.get("traffic_region_id", item.get("region_id", "cn-hongkong")), placeholder="例如：cn-hongkong", hint="选择“按当前 CDT 区域统计”时使用；共享池模式下用于备注和兼容旧配置。")}
           </div>
           <div class="credential-grid">
             {input_field("access_key_id", "阿里云 AccessKey ID", access_key_id, placeholder="粘贴 AccessKey ID", hint=access_key_hint, required=not is_edit)}
             {input_field("access_key_secret", "阿里云 AccessKey Secret", "", "password", placeholder="粘贴 AccessKey Secret", hint=secret_hint or "只在保存时写入配置文件，页面不会回显。", required=not is_edit)}
+          </div>
+          <div class="credential-grid">
+            {select_field("traffic_scope", "CDT 统计方式", current_scope, [
+                (TRAFFIC_SCOPE_REGION, "按当前 CDT 区域统计"),
+                (TRAFFIC_SCOPE_ACCOUNT_NON_CHINA, "账号非中国内地共享池"),
+                (TRAFFIC_SCOPE_ACCOUNT_ALL, "账号全部 CDT 流量"),
+            ], "香港、日本、新加坡等机器共享同一账号额度时，建议选“账号非中国内地共享池”。")}
+            {input_field("traffic_pool_id", "流量池 ID", item.get("traffic_pool_id", ""), placeholder="例如：global-200g 或 hk-account-pool", hint="同一账号共享额度的机器填同一个 ID；留空会自动生成默认池。")}
           </div>
         </section>
         <section class="form-section">
@@ -2161,6 +2254,8 @@ def save_server(fields: dict[str, list[str]]) -> str:
         "server_ip": form_value(fields, "server_ip"),
         "region_id": form_value(fields, "region_id", "cn-hongkong"),
         "traffic_region_id": form_value(fields, "traffic_region_id") or form_value(fields, "region_id", "cn-hongkong"),
+        "traffic_scope": form_value(fields, "traffic_scope", existing.get("traffic_scope", TRAFFIC_SCOPE_REGION)) or TRAFFIC_SCOPE_REGION,
+        "traffic_pool_id": form_value(fields, "traffic_pool_id") or existing.get("traffic_pool_id", ""),
         "instance_id": instance_id,
         "access_key_id": access_key_id,
         "access_key_secret": access_secret or existing.get("access_key_secret", ""),
@@ -2175,6 +2270,7 @@ def save_server(fields: dict[str, list[str]]) -> str:
         "ssh_password": ssh_password or existing.get("ssh_password", ""),
         "notes": form_value(fields, "notes"),
         "enabled": form_value(fields, "enabled") == "1",
+        "manual_stop": bool(existing.get("manual_stop", False)),
     }
 
     instances = [server for server in config.get("instances", []) if str(server.get("id")) != server_id]
@@ -2245,8 +2341,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/traffic":
             server_id = query.get("server", [""])[0]
+            pool_key = query.get("pool", [""])[0]
             days = int(query.get("days", ["1"])[0])
-            self.send_json(read_traffic_series(server_id, days))
+            self.send_json(read_traffic_series(server_id, days, pool_key))
             return
         if parsed.path == "/healthz":
             self.send_json({"ok": True})
