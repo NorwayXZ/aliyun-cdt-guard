@@ -94,9 +94,16 @@ def fmt_gb(value) -> str:
     if value is None:
         return "未知"
     try:
-        return f"{float(value):.4f} GB"
+        return f"{float(value):.2f} GB"
     except (TypeError, ValueError):
         return "未知"
+
+
+def fmt_time(value) -> str:
+    if not value:
+        return "暂无"
+    text = str(value)
+    return text.replace("T", " ").replace("+00:00", " UTC")
 
 
 def form_value(fields: dict[str, list[str]], name: str, default: str = "") -> str:
@@ -130,9 +137,9 @@ def badge(action: str | None) -> str:
         "start": ("success", "已触发启动"),
         "manual_stop": ("danger", "手动关机"),
         "manual_start": ("success", "手动开机"),
-        "manual_stopped": ("secondary", "手动保持停止"),
+        "manual_stopped": ("danger", "手动保持停止"),
         "keep_running": ("success", "保持运行"),
-        "keep_stopped": ("secondary", "保持停止"),
+        "keep_stopped": ("danger", "保持停止"),
         "hold": ("warning", "回差保持"),
         "disabled": ("secondary", "已禁用"),
         "error": ("danger", "错误"),
@@ -386,6 +393,17 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       overflow: hidden;
     }}
     .stat-card .stat-line span {{ display: block; height: 100%; width: 40%; background: var(--accent); }}
+    .stat-card.is-warning {{
+      border-color: #ffd98a;
+      box-shadow: 0 10px 34px rgba(245, 159, 0, 0.10);
+    }}
+    .stat-card.is-danger {{
+      border-color: #ffc0c0;
+      box-shadow: 0 10px 34px rgba(214, 57, 57, 0.10);
+    }}
+    .stat-card.is-muted {{
+      box-shadow: none;
+    }}
     .table {{
       --tblr-table-bg: transparent;
       color: var(--ink);
@@ -440,29 +458,92 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       border-color: var(--accent);
       box-shadow: 0 8px 18px rgba(23, 99, 209, 0.18);
     }}
-    .server-grid {{
+    .asset-workspace {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
-      gap: 18px;
-      padding: 18px;
+      gap: 16px;
+      grid-template-columns: minmax(0, 1fr) 392px;
+      padding: 16px;
     }}
-    .server-card {{
-      overflow: hidden;
+    .asset-list-panel {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      min-width: 0;
     }}
-    .server-card-head {{
-      align-items: flex-start;
+    .asset-filter-bar {{
+      align-items: center;
+      background: var(--surface-soft);
       border-bottom: 1px solid var(--line);
+      display: grid;
+      gap: 10px;
+      grid-template-columns: minmax(220px, 1fr) 156px 156px;
+      padding: 12px;
+    }}
+    .asset-count-line {{
+      color: var(--muted);
+      font-size: 12px;
+      padding: 10px 14px;
+    }}
+    .server-list {{
+      display: grid;
+      max-height: 68vh;
+      overflow-x: visible;
+      overflow-y: auto;
+    }}
+    .server-list-head,
+    .server-row {{
+      display: grid;
+      gap: 12px;
+      grid-template-columns: 126px minmax(210px, 1.4fr) minmax(126px, .8fr) 112px minmax(190px, 1fr) 132px;
+      min-width: 980px;
+    }}
+    .server-list-head {{
+      background: #f7f9fc;
+      border-bottom: 1px solid var(--line);
+      color: #687386;
+      font-size: 12px;
+      font-weight: 720;
+      padding: 10px 14px;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }}
+    .server-row {{
+      background: #fff;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      color: var(--ink);
+      cursor: pointer;
+      padding: 14px;
+      text-align: left;
+      width: 100%;
+    }}
+    .server-row:hover {{ background: #fbfcfe; }}
+    .server-row.active {{
+      background: #eef5ff;
+      box-shadow: inset 3px 0 0 var(--accent);
+    }}
+    .server-row:focus-visible {{
+      outline: 3px solid rgba(23, 99, 209, .16);
+      outline-offset: -3px;
+    }}
+    .server-row.is-danger {{ box-shadow: inset 3px 0 0 #d63939; }}
+    .server-row.is-warning {{ box-shadow: inset 3px 0 0 #f59f00; }}
+    .server-row.active.is-danger,
+    .server-row.active.is-warning {{ background: #fffaf2; }}
+    .server-cell {{
+      align-items: center;
       display: flex;
-      gap: 18px;
-      justify-content: space-between;
-      padding: 20px 22px;
+      min-width: 0;
     }}
     .server-state {{
       align-items: center;
-      border-radius: 999px;
+      border-radius: 8px;
       display: inline-flex;
       gap: 8px;
-      padding: 7px 12px;
+      min-width: 102px;
+      padding: 8px 10px;
       white-space: nowrap;
     }}
     .server-state-dot {{
@@ -481,25 +562,48 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     .server-state.muted .server-state-dot {{ background: #94a3b8; }}
     .server-state-main {{ font-weight: 760; line-height: 1; }}
     .server-state-sub {{ color: currentColor; display: block; font-size: 11px; opacity: .75; }}
-    .server-card-body {{
-      display: grid;
-      gap: 14px;
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-      padding: 18px 22px 22px;
+    .server-state-detail {{
+      align-items: flex-start;
+      border-radius: 8px;
+      display: flex;
+      gap: 10px;
+      padding: 12px;
     }}
-    .info-block {{
-      background: #fbfcfe;
+    .server-state-detail.running {{ background: var(--success-soft); color: #148341; }}
+    .server-state-detail.stopped {{ background: var(--danger-soft); color: #c92a2a; }}
+    .server-state-detail.pending {{ background: var(--warning-soft); color: #b7791f; }}
+    .server-state-detail.muted {{ background: #eef2f6; color: #64748b; }}
+    .server-detail-panel {{
+      align-self: start;
       border: 1px solid var(--line);
       border-radius: 8px;
-      min-height: 92px;
-      padding: 14px 15px;
+      min-width: 0;
+      overflow: hidden;
+      position: sticky;
+      top: 88px;
     }}
-    .info-block.span-3 {{ grid-column: span 3; }}
-    .info-block.span-4 {{ grid-column: span 4; }}
-    .info-block.span-5 {{ grid-column: span 5; }}
-    .info-block.span-6 {{ grid-column: span 6; }}
-    .info-block.span-7 {{ grid-column: span 7; }}
-    .info-block.span-12 {{ grid-column: 1 / -1; }}
+    .server-detail {{
+      display: none;
+    }}
+    .server-detail.active {{
+      display: grid;
+      gap: 14px;
+      padding: 16px;
+    }}
+    .detail-section {{
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+    }}
+    .detail-section:first-child {{
+      border-top: 0;
+      padding-top: 0;
+    }}
+    .detail-grid {{
+      display: grid;
+      gap: 10px 14px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }}
+    .detail-item {{ min-width: 0; }}
     .info-label {{
       color: var(--muted);
       font-size: 12px;
@@ -524,6 +628,35 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       font-size: 18px;
       font-weight: 720;
     }}
+    .traffic-compact {{
+      min-width: 0;
+      width: 100%;
+    }}
+    .traffic-meta {{
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }}
+    .traffic-amount {{
+      color: #111827;
+      font-weight: 720;
+    }}
+    .sparkline {{
+      display: block;
+      height: 28px;
+      margin-top: 7px;
+      width: 100%;
+    }}
+    .sparkline path {{
+      fill: none;
+      stroke: var(--accent);
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 2;
+    }}
+    .sparkline .area {{ fill: rgba(23, 99, 209, .08); stroke: none; }}
     .btn-list form {{ display: inline-block; margin: 0; }}
     .power-panel {{
       align-items: center;
@@ -549,6 +682,47 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       max-width: 420px;
     }}
     .power-main-btn {{ min-width: 168px; }}
+    .detail-actions {{
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      justify-content: space-between;
+    }}
+    .overflow-menu {{
+      position: relative;
+    }}
+    .overflow-menu summary {{
+      list-style: none;
+    }}
+    .overflow-menu summary::-webkit-details-marker {{ display: none; }}
+    .overflow-menu[open] .overflow-popover {{
+      display: block;
+    }}
+    .overflow-popover {{
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 18px 50px rgba(15, 23, 42, .12);
+      display: none;
+      min-width: 148px;
+      padding: 8px;
+      position: absolute;
+      right: 0;
+      top: calc(100% + 6px);
+      z-index: 10;
+    }}
+    .empty-state {{
+      color: var(--muted);
+      padding: 32px 18px;
+      text-align: center;
+    }}
+    .kbd-soft {{
+      background: #eef2f6;
+      border-radius: 6px;
+      color: #475569;
+      font-size: 12px;
+      padding: 2px 6px;
+    }}
     .form-control, .form-select {{
       border-color: var(--line-strong);
       border-radius: 8px;
@@ -567,14 +741,49 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     .log-meta {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; }}
     .grid-full {{ grid-column: 1 / -1; }}
     .asset-toolbar {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
+    @media (max-width: 1180px) {{
+      .asset-workspace {{ grid-template-columns: 1fr; }}
+      .server-detail-panel {{ position: static; }}
+      .server-list {{ max-height: none; }}
+    }}
     @media (max-width: 992px) {{
       .navbar-vertical {{ width: 100%; }}
       .container-xl {{ padding-left: 16px; padding-right: 16px; }}
-      .credential-grid, .log-layout, .log-meta, .server-grid {{ grid-template-columns: 1fr; }}
-      .server-card-body {{ grid-template-columns: 1fr; }}
-      .info-block.span-3, .info-block.span-4, .info-block.span-5, .info-block.span-6, .info-block.span-7 {{ grid-column: 1 / -1; }}
-      .server-card-head, .power-panel {{ align-items: flex-start; flex-direction: column; }}
+      .credential-grid, .log-layout, .log-meta, .asset-filter-bar, .detail-grid {{ grid-template-columns: 1fr; }}
+      .power-panel {{ align-items: flex-start; flex-direction: column; }}
       .table-responsive {{ min-height: 0; }}
+    }}
+    @media (max-width: 640px) {{
+      .navbar-expand-md.d-print-none .container-xl {{
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 12px;
+      }}
+      .navbar-nav.flex-row.order-md-last.ms-auto {{ margin-left: 0 !important; }}
+      .page-title {{ font-size: 22px; }}
+      .asset-toolbar {{ align-items: flex-start; flex-direction: column; }}
+      .asset-workspace {{ padding: 10px; }}
+      .server-list-head {{ display: none; }}
+      .server-row {{
+        gap: 10px;
+        grid-template-columns: 1fr;
+        min-width: 0;
+        padding: 12px;
+      }}
+      .server-cell {{
+        align-items: flex-start;
+        display: block;
+      }}
+      .server-state {{ min-width: 0; }}
+      .traffic-compact {{ display: block; }}
+      .server-detail.active {{ padding: 14px; }}
+      .detail-actions {{ align-items: stretch; flex-direction: column; }}
+      .detail-actions .btn, .detail-actions .overflow-menu {{ width: 100%; }}
+      .overflow-popover {{
+        position: static;
+        margin-top: 8px;
+        width: 100%;
+      }}
     }}
   </style>
 </head>
@@ -619,6 +828,71 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
         button.dataset.shown = "1";
       }}
     }}
+    function initAssetBoard() {{
+      const board = document.querySelector("[data-asset-board]");
+      if (!board) return;
+      const rows = Array.from(board.querySelectorAll("[data-server-row]"));
+      const search = board.querySelector("[data-asset-search]");
+      const filter = board.querySelector("[data-asset-filter]");
+      const sort = board.querySelector("[data-asset-sort]");
+      const list = board.querySelector("[data-server-list]");
+      const count = board.querySelector("[data-visible-count]");
+      const empty = board.querySelector("[data-empty-state]");
+
+      function selectServer(id) {{
+        rows.forEach((row) => {{
+          const active = row.dataset.serverId === id;
+          row.classList.toggle("active", active);
+          row.setAttribute("aria-selected", active ? "true" : "false");
+        }});
+        board.querySelectorAll("[data-server-detail]").forEach((panel) => {{
+          panel.classList.toggle("active", panel.dataset.serverId === id);
+        }});
+      }}
+
+      function applyFilters() {{
+        const q = (search?.value || "").trim().toLowerCase();
+        const state = filter?.value || "all";
+        const ordered = rows.slice().sort((a, b) => {{
+          const mode = sort?.value || "health";
+          if (mode === "traffic") return Number(b.dataset.used || 0) - Number(a.dataset.used || 0);
+          if (mode === "name") return (a.dataset.name || "").localeCompare(b.dataset.name || "", "zh-Hans-CN");
+          return Number(a.dataset.priority || 9) - Number(b.dataset.priority || 9);
+        }});
+        ordered.forEach((row) => list.appendChild(row));
+
+        let visible = 0;
+        let firstVisible = null;
+        ordered.forEach((row) => {{
+          const matchesText = !q || (row.dataset.search || "").includes(q);
+          const matchesState = state === "all" || row.dataset.filterState === state;
+          const show = matchesText && matchesState;
+          row.hidden = !show;
+          if (show) {{
+            visible += 1;
+            firstVisible ||= row;
+          }}
+        }});
+        if (count) count.textContent = visible;
+        if (empty) empty.hidden = visible !== 0;
+
+        const active = rows.find((row) => row.classList.contains("active") && !row.hidden);
+        if (!active && firstVisible) selectServer(firstVisible.dataset.serverId);
+      }}
+
+      rows.forEach((row) => {{
+        row.addEventListener("click", () => selectServer(row.dataset.serverId));
+        row.addEventListener("keydown", (event) => {{
+          if (event.key === "Enter" || event.key === " ") {{
+            event.preventDefault();
+            selectServer(row.dataset.serverId);
+          }}
+        }});
+      }});
+      [search, filter, sort].forEach((input) => input && input.addEventListener("input", applyFilters));
+      applyFilters();
+    }}
+    document.addEventListener("DOMContentLoaded", initAssetBoard);
   </script>
 </body>
 </html>
@@ -637,152 +911,352 @@ def render_check_action() -> str:
 
 
 def render_summary_cards(summary: dict) -> str:
+    warnings = int(summary.get("warnings", 0) or 0)
+    errors = int(summary.get("errors", 0) or 0)
+    stopped = int(summary.get("stopped", 0) or 0)
+    warning_class = "is-warning" if warnings else "is-muted"
+    error_class = "is-danger" if errors else "is-muted"
+    stopped_class = "is-danger" if stopped else "is-muted"
     return f"""
     <div class="row row-deck row-cards mb-4">
       <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">总机器</div><div class="h1 mb-0">{esc(summary.get('total', 0))}</div><div class="stat-line"><span style="width:100%"></span></div></div></div></div>
       <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">启用保护</div><div class="h1 mb-0">{esc(summary.get('enabled', 0))}</div><div class="stat-line"><span style="width:70%"></span></div></div></div></div>
-      <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">流量预警</div><div class="h1 mb-0 text-yellow">{esc(summary.get('warnings', 0))}</div><div class="stat-line"><span style="width:28%; background:#f59f00"></span></div></div></div></div>
-      <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">检查错误</div><div class="h1 mb-0 text-red">{esc(summary.get('errors', 0))}</div><div class="stat-line"><span style="width:28%; background:#d63939"></span></div></div></div></div>
-      <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">已停止</div><div class="h1 mb-0">{esc(summary.get('stopped', 0))}</div><div class="stat-line"><span style="width:28%; background:#64748b"></span></div></div></div></div>
+      <div class="col-sm-6 col-xl"><div class="card stat-card {warning_class}"><div class="card-body"><div class="subheader">流量预警</div><div class="h1 mb-0 text-yellow">{esc(warnings)}</div><div class="stat-line"><span style="width:{100 if warnings else 18}%; background:#f59f00"></span></div></div></div></div>
+      <div class="col-sm-6 col-xl"><div class="card stat-card {error_class}"><div class="card-body"><div class="subheader">检查错误</div><div class="h1 mb-0 text-red">{esc(errors)}</div><div class="stat-line"><span style="width:{100 if errors else 18}%; background:#d63939"></span></div></div></div></div>
+      <div class="col-sm-6 col-xl"><div class="card stat-card {stopped_class}"><div class="card-body"><div class="subheader">已停止</div><div class="h1 mb-0">{esc(stopped)}</div><div class="stat-line"><span style="width:{100 if stopped else 18}%; background:#64748b"></span></div></div></div></div>
     </div>
     """
 
 
-def render_asset_cards(instances: list[dict], metadata: dict[str, dict]) -> str:
-    cards = []
-    for item in instances:
-        meta = metadata.get(str(item.get("id")), {})
-        used_pct = item.get("used_pct")
-        pct = 0 if used_pct is None else max(0, min(float(used_pct), 100))
-        progress = "bg-green"
-        if item.get("last_error") or item.get("action") == "stop":
-            progress = "bg-red"
-        elif item.get("warning") or item.get("action") == "hold":
-            progress = "bg-yellow"
-
-        public_ips = item.get("public_ips") or []
-        private_ips = item.get("private_ips") or []
-        primary_ip = first_value(meta.get("server_ip"), meta.get("public_ip"), public_ips[0] if public_ips else None, default="未识别")
-        product_name = first_value(meta.get("product_name"), meta.get("product"), item.get("label"), default="未命名产品")
-        asset_label = first_value(meta.get("label"), item.get("label"), default=item.get("instance_id"))
-        provider = first_value(meta.get("provider"), default="阿里云")
-        panel_username = first_value(meta.get("panel_username"), meta.get("login_username"), meta.get("username"))
-        panel_password = first_value(meta.get("panel_password"), meta.get("login_password"), meta.get("password"))
-        ssh_password = first_value(meta.get("ssh_password"))
-        ssh_text = ""
-        if meta.get("ssh_user") or meta.get("ssh_port"):
-            ssh_text = f"{meta.get('ssh_user', 'root')}@{primary_ip}:{meta.get('ssh_port', 22)}"
-        note_text = first_value(meta.get("notes"), meta.get("remark"), meta.get("account_note"))
-        state_class, state_label, state_sub = status_view(item.get("instance_status"))
-        manual_note = "手动关机保持中" if item.get("manual_stop") else ""
-        cards.append(
-            f"""
-            <article class="card server-card">
-              <div class="server-card-head">
-                <div>
-                  <div class="asset-name">{esc(product_name)}</div>
-                  <div class="asset-sub">{esc(asset_label)}</div>
-                  <div class="asset-sub">{esc(provider)} · {esc(item.get('instance_name') or '未识别 ECS 名')}</div>
-                </div>
-                <div class="server-state {state_class}">
-                  <span class="server-state-dot"></span>
-                  <div>
-                    <div class="server-state-main">{esc(state_label)}</div>
-                    <div class="server-state-sub">{esc(state_sub)}</div>
-                  </div>
-                </div>
-              </div>
-              <div class="server-card-body">
-                <section class="info-block span-4">
-                  <div class="info-label">服务器 IP</div>
-                  <div class="ip-main">{esc(primary_ip)}</div>
-                  {small_line("公网 ", ", ".join(public_ips))}
-                  {small_line("内网 ", ", ".join(private_ips))}
-                </section>
-                <section class="info-block span-4">
-                  <div class="info-label">阿里云信息</div>
-                  <div class="info-value">{esc(item.get('region_id'))}</div>
-                  <div class="text-secondary small">CDT {esc(item.get('traffic_region_id'))}</div>
-                  <div class="text-secondary small">{esc(item.get('instance_id'))}</div>
-                </section>
-                <section class="info-block span-4">
-                  <div class="info-label">当前判断</div>
-                  {badge(item.get('action'))}
-                  <div class="text-secondary small mt-2">{esc(item.get('reason'))}</div>
-                  {f'<div class="text-danger small mt-1">{esc(manual_note)}</div>' if manual_note else ''}
-                </section>
-                <section class="info-block span-6">
-                  <div class="traffic-row">
-                    <div>
-                      <div class="info-label">CDT 用量</div>
-                      <div class="traffic-value">{fmt_gb(item.get('traffic_gb'))}</div>
-                    </div>
-                    <div class="text-secondary small">上限 {fmt_gb(item.get('stop_threshold_gb'))}</div>
-                  </div>
-                  <div class="progress mt-3">
-                    <div class="progress-bar {progress}" style="width:{pct:.2f}%"></div>
-                  </div>
-                </section>
-                <section class="info-block span-6">
-                  <div class="info-label">保护阈值</div>
-                  <div class="info-value">剩余 {fmt_gb(item.get('remaining_gb'))}</div>
-                  <div class="text-secondary small">预警 {fmt_gb(item.get('warning_threshold_gb'))}</div>
-                  <div class="text-secondary small">恢复启动 {fmt_gb(item.get('start_threshold_gb'))}</div>
-                </section>
-                <section class="info-block span-6">
-                  <div class="info-label">登录信息</div>
-                  <div>{link_or_text(meta.get('panel_url') or meta.get('login_url') or meta.get('website'))}</div>
-                  {small_line("账号 ", panel_username)}
-                  {secret_button(panel_password, "显示面板密码")}
-                  {small_line("SSH ", ssh_text)}
-                  {secret_button(ssh_password, "显示 SSH 密码") if ssh_password else ""}
-                </section>
-                <section class="info-block span-6">
-                  <div class="info-label">备注</div>
-                  <div class="note-cell">{esc(note_text) if note_text else '<span class="text-secondary">未填写</span>'}</div>
-                </section>
-                <section class="info-block span-12">
-                  <div class="info-label">电源控制</div>
-                  {power_controls(str(item.get('id')), item.get('instance_status'))}
-                </section>
-                <section class="info-block span-12">
-                  <div class="asset-toolbar">
-                    <div>
-                      <div class="info-label">最近检查</div>
-                      <div class="info-value">{esc(item.get('updated_at'))}</div>
-                    </div>
-                    <div class="btn-list">
-                      <a class="btn btn-sm" href="/servers/edit?id={esc(item.get('id'))}">编辑</a>
-                      <form method="post" action="/servers/delete" onsubmit="return confirm('确认删除这台服务器？')">
-                        <input type="hidden" name="id" value="{esc(item.get('id'))}">
-                        <button class="btn btn-sm btn-outline-danger" type="submit">删除</button>
-                      </form>
-                    </div>
-                  </div>
-                </section>
-              </div>
-            </article>
-            """
-        )
-    return "".join(cards)
+def progress_class(item: dict) -> str:
+    if item.get("last_error") or item.get("action") in {"stop", "manual_stop", "manual_stopped", "keep_stopped"}:
+        return "bg-red"
+    if used_percent(item) >= 100:
+        return "bg-red"
+    if item.get("warning") or item.get("action") == "hold":
+        return "bg-yellow"
+    return "bg-green"
 
 
-def render_assets_card(instances: list[dict], metadata: dict[str, dict]) -> str:
-    cards = render_asset_cards(instances, metadata)
+def used_percent(item: dict) -> float:
+    value = item.get("used_pct")
+    if value is None:
+        return 0
+    try:
+        return max(0, min(float(value), 100))
+    except (TypeError, ValueError):
+        return 0
+
+
+def server_health(item: dict) -> tuple[str, str, int]:
+    status = item.get("instance_status")
+    action = item.get("action")
+    if item.get("last_error") or action == "stop" or item.get("manual_stop"):
+        return "danger", "异常/停机", 0
+    if status == "Stopped":
+        return "danger", "已关机", 1
+    if item.get("warning") or action == "hold":
+        return "warning", "流量预警", 2
+    if action == "disabled" or status == "Disabled":
+        return "muted", "已禁用", 4
+    if status == "Running":
+        return "running", "正常运行", 5
+    return "muted", "状态未知", 3
+
+
+def server_identity(item: dict, metadata: dict[str, dict]) -> dict[str, str]:
+    meta = metadata.get(str(item.get("id")), {})
+    public_ips = item.get("public_ips") or []
+    private_ips = item.get("private_ips") or []
+    primary_ip = first_value(
+        meta.get("server_ip"),
+        meta.get("public_ip"),
+        public_ips[0] if public_ips else None,
+        default="未识别",
+    )
+    product_name = first_value(meta.get("product_name"), meta.get("product"), item.get("label"), default="未命名产品")
+    asset_label = first_value(meta.get("label"), item.get("label"), default=item.get("instance_id"))
+    provider = first_value(meta.get("provider"), default="阿里云")
+    return {
+        "id": str(item.get("id") or item.get("instance_id")),
+        "meta": meta,
+        "public_ips": public_ips,
+        "private_ips": private_ips,
+        "primary_ip": str(primary_ip),
+        "product_name": str(product_name),
+        "asset_label": str(asset_label),
+        "provider": str(provider),
+    }
+
+
+def traffic_values(server_id: str, history: list[dict], current) -> list[float]:
+    values: list[float] = []
+    for event in history:
+        if str(event.get("id")) != server_id:
+            continue
+        value = event.get("traffic_gb")
+        if value is None:
+            continue
+        try:
+            values.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    if current is not None:
+        try:
+            values.append(float(current))
+        except (TypeError, ValueError):
+            pass
+    return values[-18:]
+
+
+def sparkline_svg(values: list[float]) -> str:
+    if len(values) < 2:
+        return '<div class="text-secondary small mt-2">暂无趋势</div>'
+    width = 128
+    height = 28
+    low = min(values)
+    high = max(values)
+    span = high - low or 1
+    points = []
+    for index, value in enumerate(values):
+        x = index * width / (len(values) - 1)
+        y = height - ((value - low) / span * (height - 4)) - 2
+        points.append((x, y))
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+    area = f"0,{height} {line} {width},{height}"
+    return f'<svg class="sparkline" viewBox="0 0 {width} {height}" aria-hidden="true"><polygon class="area" points="{area}"></polygon><path d="M {line}"></path></svg>'
+
+
+def render_server_row(item: dict, metadata: dict[str, dict], history: list[dict], active: bool = False) -> str:
+    identity = server_identity(item, metadata)
+    state_class, state_label, state_sub = status_view(item.get("instance_status"))
+    health_class, filter_label, priority = server_health(item)
+    pct = used_percent(item)
+    search_text = " ".join(
+        [
+            identity["product_name"],
+            identity["asset_label"],
+            identity["provider"],
+            identity["primary_ip"],
+            str(item.get("instance_id") or ""),
+            str(item.get("region_id") or ""),
+            str(item.get("traffic_region_id") or ""),
+            str(item.get("instance_name") or ""),
+        ]
+    ).lower()
+    row_classes = ["server-row", f"is-{health_class}"]
+    if active:
+        row_classes.append("active")
     return f"""
-    <div class="card" id="servers">
+      <article class="{' '.join(row_classes)}" data-server-row data-server-id="{esc(identity['id'])}" role="button" tabindex="0"
+        data-search="{esc(search_text)}" data-filter-state="{esc(health_class)}" data-priority="{priority}"
+        data-used="{pct:.4f}" data-name="{esc(identity['product_name'].lower())}" aria-selected="{'true' if active else 'false'}">
+        <span class="server-cell">
+          <span class="server-state {state_class}">
+            <span class="server-state-dot"></span>
+            <span>
+              <span class="server-state-main">{esc(state_label)}</span>
+              <span class="server-state-sub">{esc(state_sub)}</span>
+            </span>
+          </span>
+        </span>
+        <span class="server-cell">
+          <span class="text-truncate">
+            <span class="asset-name d-block text-truncate">{esc(identity['product_name'])}</span>
+            <span class="asset-sub d-block text-truncate">{esc(identity['asset_label'])} · {esc(identity['provider'])}</span>
+          </span>
+        </span>
+        <span class="server-cell"><span class="ip-main text-truncate">{esc(identity['primary_ip'])}</span></span>
+        <span class="server-cell"><span class="text-secondary small">{esc(item.get('region_id'))}</span></span>
+        <span class="server-cell">
+          <span class="traffic-compact">
+            <span class="traffic-meta">
+              <span class="traffic-amount">{fmt_gb(item.get('traffic_gb'))}</span>
+              <span class="text-secondary small">{pct:.0f}%</span>
+            </span>
+            <span class="progress"><span class="progress-bar {progress_class(item)}" style="width:{pct:.2f}%"></span></span>
+            {sparkline_svg(traffic_values(identity['id'], history, item.get('traffic_gb')))}
+          </span>
+        </span>
+        <span class="server-cell">
+          <span>
+            {badge(item.get('action'))}
+            <span class="asset-sub d-block mt-1">{esc(filter_label)}</span>
+          </span>
+        </span>
+      </article>
+    """
+
+
+def render_server_detail(item: dict, metadata: dict[str, dict], active: bool = False) -> str:
+    identity = server_identity(item, metadata)
+    meta = identity["meta"]
+    pct = used_percent(item)
+    state_class, state_label, state_sub = status_view(item.get("instance_status"))
+    panel_username = first_value(meta.get("panel_username"), meta.get("login_username"), meta.get("username"))
+    panel_password = first_value(meta.get("panel_password"), meta.get("login_password"), meta.get("password"))
+    ssh_password = first_value(meta.get("ssh_password"))
+    ssh_text = ""
+    if meta.get("ssh_user") or meta.get("ssh_port"):
+        ssh_text = f"{meta.get('ssh_user', 'root')}@{identity['primary_ip']}:{meta.get('ssh_port', 22)}"
+    note_text = first_value(meta.get("notes"), meta.get("remark"), meta.get("account_note"))
+    manual_note = "手动关机保持中，自动启动已暂停。" if item.get("manual_stop") else ""
+    return f"""
+      <section class="server-detail {'active' if active else ''}" data-server-detail data-server-id="{esc(identity['id'])}">
+        <div class="detail-section">
+          <div class="d-flex align-items-start justify-content-between gap-3">
+            <div class="text-truncate">
+              <div class="asset-name text-truncate">{esc(identity['product_name'])}</div>
+              <div class="asset-sub text-truncate">{esc(identity['asset_label'])} · {esc(item.get('instance_name') or '未识别 ECS 名')}</div>
+            </div>
+            <span class="server-state-detail {state_class}">
+              <span class="server-state-dot"></span>
+              <span>
+                <span class="server-state-main">{esc(state_label)}</span>
+                <span class="server-state-sub">{esc(state_sub)}</span>
+              </span>
+            </span>
+          </div>
+        </div>
+        <div class="detail-section">
+          <div class="traffic-row">
+            <div>
+              <div class="info-label">CDT 用量</div>
+              <div class="traffic-value">{fmt_gb(item.get('traffic_gb'))}</div>
+            </div>
+            <div class="text-secondary small">停机 {fmt_gb(item.get('stop_threshold_gb'))}</div>
+          </div>
+          <div class="progress mt-3">
+            <div class="progress-bar {progress_class(item)}" style="width:{pct:.2f}%"></div>
+          </div>
+          <div class="d-flex justify-content-between mt-2 text-secondary small">
+            <span>剩余 {fmt_gb(item.get('remaining_gb'))}</span>
+            <span>{pct:.0f}% 已用</span>
+          </div>
+        </div>
+        <div class="detail-section">
+          <div class="info-label">当前判断</div>
+          <div>{badge(item.get('action'))}</div>
+          <div class="text-secondary small mt-2">{esc(item.get('reason'))}</div>
+          {f'<div class="text-danger small mt-1">{esc(manual_note)}</div>' if manual_note else ''}
+          {f'<div class="text-danger small mt-1">{esc(item.get("last_error"))}</div>' if item.get("last_error") else ''}
+        </div>
+        <div class="detail-section">
+          <div class="info-label">电源控制</div>
+          {power_controls(identity['id'], item.get('instance_status'))}
+        </div>
+        <div class="detail-section">
+          <div class="detail-grid">
+            <div class="detail-item">
+              <div class="info-label">服务器 IP</div>
+              <div class="ip-main">{esc(identity['primary_ip'])}</div>
+              {small_line("公网 ", ", ".join(identity["public_ips"]))}
+              {small_line("内网 ", ", ".join(identity["private_ips"]))}
+            </div>
+            <div class="detail-item">
+              <div class="info-label">区域</div>
+              <div class="info-value">{esc(item.get('region_id'))}</div>
+              <div class="text-secondary small">CDT {esc(item.get('traffic_region_id'))}</div>
+            </div>
+            <div class="detail-item">
+              <div class="info-label">保护阈值</div>
+              <div class="info-value">预警 {fmt_gb(item.get('warning_threshold_gb'))}</div>
+              <div class="text-secondary small">恢复启动 {fmt_gb(item.get('start_threshold_gb'))}</div>
+            </div>
+            <div class="detail-item">
+              <div class="info-label">最近检查</div>
+              <div class="info-value">{esc(fmt_time(item.get('updated_at')))}</div>
+            </div>
+          </div>
+        </div>
+        <details class="detail-section">
+          <summary class="info-label">登录、实例 ID 与备注</summary>
+          <div class="detail-grid mt-3">
+            <div class="detail-item">
+              <div class="info-label">登录网站</div>
+              <div>{link_or_text(meta.get('panel_url') or meta.get('login_url') or meta.get('website'))}</div>
+              {small_line("账号 ", panel_username)}
+              {secret_button(panel_password, "显示面板密码")}
+            </div>
+            <div class="detail-item">
+              <div class="info-label">SSH 备注</div>
+              {small_line("SSH ", ssh_text)}
+              {secret_button(ssh_password, "显示 SSH 密码") if ssh_password else '<div class="text-secondary small">SSH 密码未填写</div>'}
+            </div>
+            <div class="detail-item">
+              <div class="info-label">实例 ID</div>
+              <div class="text-secondary small text-break">{esc(item.get('instance_id'))}</div>
+            </div>
+            <div class="detail-item">
+              <div class="info-label">备注</div>
+              <div class="note-cell">{esc(note_text) if note_text else '<span class="text-secondary">未填写</span>'}</div>
+            </div>
+          </div>
+        </details>
+        <div class="detail-section detail-actions">
+          <a class="btn btn-primary btn-sm" href="/servers/edit?id={esc(identity['id'])}">编辑这台服务器</a>
+          <details class="overflow-menu">
+            <summary class="btn btn-sm">更多</summary>
+            <div class="overflow-popover">
+              <form method="post" action="/servers/delete" onsubmit="return confirm('确认删除这台服务器？')">
+                <input type="hidden" name="id" value="{esc(identity['id'])}">
+                <button class="btn btn-sm btn-outline-danger w-100" type="submit">删除服务器</button>
+              </form>
+            </div>
+          </details>
+        </div>
+      </section>
+    """
+
+
+def render_assets_card(instances: list[dict], metadata: dict[str, dict], history: list[dict]) -> str:
+    sorted_instances = sorted(instances, key=lambda item: (server_health(item)[2], -used_percent(item), str(item.get("label") or "")))
+    rows = []
+    details = []
+    for index, item in enumerate(sorted_instances):
+        rows.append(render_server_row(item, metadata, history, active=index == 0))
+        details.append(render_server_detail(item, metadata, active=index == 0))
+    return f"""
+    <div class="card" id="servers" data-asset-board>
       <div class="card-header">
         <div class="asset-toolbar w-100">
           <h3 class="card-title">服务器资产</h3>
           <div class="btn-list">
-            <a href="/servers/new" class="btn btn-primary btn-sm">新增服务器</a>
             <a href="/api/status" class="btn btn-sm">状态 JSON</a>
             <a href="/api/history" class="btn btn-sm">历史 JSON</a>
           </div>
         </div>
       </div>
-      <div class="server-grid">
-        {cards if cards else '<div class="text-secondary">暂无服务器，请先新增。</div>'}
+      <div class="asset-workspace">
+        <div class="asset-list-panel">
+          <div class="asset-filter-bar">
+            <input class="form-control" type="search" placeholder="搜索名称、IP、实例 ID、区域" data-asset-search>
+            <select class="form-select" data-asset-filter>
+              <option value="all">全部状态</option>
+              <option value="danger">异常/停机</option>
+              <option value="warning">流量预警</option>
+              <option value="running">运行中</option>
+              <option value="muted">未知/禁用</option>
+            </select>
+            <select class="form-select" data-asset-sort>
+              <option value="health">异常优先</option>
+              <option value="traffic">流量最高</option>
+              <option value="name">名称排序</option>
+            </select>
+          </div>
+          <div class="asset-count-line">当前显示 <span data-visible-count>{len(sorted_instances)}</span> / {len(sorted_instances)} 台</div>
+          <div class="server-list-head">
+            <div>状态</div><div>服务器</div><div>IP</div><div>区域</div><div>CDT 用量</div><div>动作</div>
+          </div>
+          <div class="server-list" data-server-list>
+            {''.join(rows)}
+          </div>
+          <div class="empty-state" data-empty-state hidden>没有符合条件的服务器</div>
+          {'' if rows else '<div class="empty-state">暂无服务器，请到“新增/编辑”添加第一台。</div>'}
+        </div>
+        <aside class="server-detail-panel">
+          {''.join(details) if details else '<div class="empty-state">选择一台服务器查看详情。</div>'}
+        </aside>
       </div>
     </div>
     """
@@ -795,8 +1269,9 @@ def render_dashboard(query: dict[str, list[str]] | None = None) -> bytes:
     summary = status.get("summary", {})
     instances = status.get("instances", [])
     metadata = config_by_id(config)
+    history = read_history(1000)
     flash = query.get("flash", [""])[0]
-    body = render_summary_cards(summary) + render_assets_card(instances, metadata)
+    body = render_summary_cards(summary) + render_assets_card(instances, metadata, history)
     return page_shell(
         "overview",
         "CDT 流量保护与服务器资产面板",
