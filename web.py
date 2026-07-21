@@ -431,11 +431,20 @@ def flash_message(code: str) -> str:
         "notify_saved": "通知设置已保存",
         "notify_test_sent": "已发送测试通知，请检查接收端",
         "notify_test_failed": "测试通知发送失败，请检查配置",
+        "telegram_discovered": "已获取 Telegram 会话，请选择或复制 Chat ID",
+        "telegram_discover_failed": "获取 Telegram Chat ID 失败，请确认 Bot Token 正确且你已经给机器人发过消息",
+        "telegram_chat_saved": "Telegram Chat ID 已保存",
         "login_required": "请先登录",
         "login_failed": "用户名或密码不正确",
         "logged_out": "已退出登录",
     }
     return messages.get(code, code)
+
+
+def flash_class(code: str) -> str:
+    if code.endswith("_failed") or code in {"login_failed", "telegram_discover_failed"}:
+        return "alert-danger"
+    return "alert-success"
 
 
 def web_credentials() -> tuple[str, str, dict[str, str]]:
@@ -667,7 +676,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
         f'<li class="nav-item {"active" if key == active else ""}"><a class="nav-link" href="{href}"><span class="nav-link-title">{label}</span></a></li>'
         for href, key, label in nav
     )
-    flash_html = f'<div class="alert alert-success">{esc(flash_message(flash))}</div>' if flash else ""
+    flash_html = f'<div class="alert {flash_class(flash)}">{esc(flash_message(flash))}</div>' if flash else ""
     refresh_meta = '<meta http-equiv="refresh" content="60">' if auto_refresh else ""
     header_actions = f"""
       {actions}
@@ -1420,6 +1429,65 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     }}
     @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
     .credential-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
+    .channel-status {{
+      background: var(--surface-soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-bottom: 16px;
+      padding: 14px;
+    }}
+    .channel-status-item {{ min-width: 0; }}
+    .channel-status-label {{
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 720;
+      margin-bottom: 4px;
+    }}
+    .channel-status-value {{
+      color: #111827;
+      font-size: 14px;
+      font-weight: 720;
+      overflow-wrap: anywhere;
+    }}
+    .setup-box {{
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+      margin: 10px 0 16px;
+      padding: 12px 14px;
+    }}
+    .chat-candidates {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      margin-top: 12px;
+      overflow: hidden;
+    }}
+    .chat-candidate {{
+      align-items: center;
+      border-top: 1px solid var(--line);
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      padding: 12px;
+    }}
+    .chat-candidate:first-child {{ border-top: 0; }}
+    .chat-id-code {{
+      background: #eef2f6;
+      border-radius: 6px;
+      color: #475569;
+      display: inline-block;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      margin-top: 4px;
+      padding: 3px 6px;
+    }}
     .log-layout {{ display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; }}
     .log-item summary {{ cursor: pointer; list-style: none; }}
     .log-item summary::-webkit-details-marker {{ display: none; }}
@@ -1437,6 +1505,8 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       .navbar-vertical {{ width: 100%; }}
       .container-xl {{ padding-left: 16px; padding-right: 16px; }}
       .credential-grid, .log-layout, .log-meta, .asset-filter-bar, .detail-grid {{ grid-template-columns: 1fr; }}
+      .channel-status {{ grid-template-columns: 1fr; }}
+      .chat-candidate {{ grid-template-columns: 1fr; }}
       .power-panel {{ align-items: flex-start; flex-direction: column; }}
       .table-responsive {{ min-height: 0; }}
     }}
@@ -2421,9 +2491,75 @@ def render_logs_page(query: dict[str, list[str]] | None = None) -> bytes:
     )
 
 
+def yes_no(value: bool) -> str:
+    return "已启用" if value else "未启用"
+
+
+def render_telegram_status(config: dict, state: dict) -> str:
+    status = notifications.telegram_status(config)
+    last_error = state.get("telegram_last_error", "")
+    last_test = state.get("last_test_result") or {}
+    chat_id = str(status.get("chat_id") or "")
+    chat_warning = ""
+    if chat_id.startswith("@"):
+        chat_warning = "当前 Chat ID 看起来像用户名。私聊通知通常需要纯数字 Chat ID，请给机器人发消息后点击“获取 Chat ID”。"
+    test_text = "暂无测试"
+    if last_test:
+        test_text = "成功" if last_test.get("ok") else f"失败：{last_test.get('error') or '请查看渠道配置'}"
+    return f"""
+      <div class="channel-status">
+        <div class="channel-status-item">
+          <div class="channel-status-label">通知总开关</div>
+          <div class="channel-status-value">{esc(yes_no(bool(config.get('enabled'))))}</div>
+        </div>
+        <div class="channel-status-item">
+          <div class="channel-status-label">Telegram 状态</div>
+          <div class="channel-status-value">{esc('可发送' if status.get('ready') else '未就绪')}</div>
+        </div>
+        <div class="channel-status-item">
+          <div class="channel-status-label">Bot Token</div>
+          <div class="channel-status-value">{esc('已保存 ' + status.get('token_masked') if status.get('token_configured') else '未保存')}</div>
+        </div>
+        <div class="channel-status-item">
+          <div class="channel-status-label">Chat ID</div>
+          <div class="channel-status-value">{esc(status.get('chat_id') or '未填写')}</div>
+        </div>
+      </div>
+      {f'<div class="alert alert-danger mb-3">{esc(last_error)}</div>' if last_error else ''}
+      {f'<div class="alert alert-warning mb-3">{esc(chat_warning)}</div>' if chat_warning else ''}
+      <div class="text-secondary small mb-3">上次测试：{esc(test_text)}</div>
+    """
+
+
+def render_chat_candidates(state: dict) -> str:
+    candidates = state.get("telegram_chat_candidates") or []
+    if not candidates:
+        return '<div class="text-secondary small mt-2">暂无候选 Chat ID。保存 Bot Token 后，先给机器人发一条消息，再点击“获取 Chat ID”。</div>'
+    rows = []
+    for item in candidates:
+        chat_id = str(item.get("chat_id") or "")
+        title = item.get("title") or chat_id
+        username = item.get("username") or ""
+        chat_type = item.get("type") or "unknown"
+        rows.append(
+            f"""
+            <div class="chat-candidate">
+              <div>
+                <div class="fw-semibold">{esc(title)}</div>
+                <div class="text-secondary small">类型：{esc(chat_type)} {f'@{esc(username)}' if username else ''}</div>
+                <div class="chat-id-code">{esc(chat_id)}</div>
+              </div>
+              <button class="btn btn-sm btn-primary" type="submit" name="chat_id" value="{esc(chat_id)}" form="telegram-use-chat-form">使用这个 Chat ID</button>
+            </div>
+            """
+        )
+    return f'<div class="chat-candidates">{"".join(rows)}</div>'
+
+
 def render_notifications_page(query: dict[str, list[str]] | None = None) -> bytes:
     query = query or {}
     config = notifications.load_config()
+    state = notifications.load_state()
     rules = config.get("rules", {})
     telegram = config.get("telegram", {})
     webhook = config.get("webhook", {})
@@ -2457,12 +2593,23 @@ def render_notifications_page(query: dict[str, list[str]] | None = None) -> byte
 
         <section class="form-section">
           <h3 class="form-section-title">Telegram</h3>
+          {render_telegram_status(config, state)}
+          <div class="setup-box">
+            <strong>获取 Chat ID：</strong>先填写 Bot Token 并保存；然后在 Telegram 给机器人发送任意一条消息；最后点击下面的“获取 Chat ID”。如果机器人在群组里，请先把机器人拉进群并在群里发一条消息。
+          </div>
           {checkbox_field("telegram_enabled", "启用 Telegram Bot 通知", bool(telegram.get("enabled")), "从 BotFather 创建机器人，填 Bot Token；Chat ID 可以是个人、群组或频道。")}
           <div class="credential-grid">
-            {input_field("telegram_bot_token", "Bot Token", "", "password", placeholder="123456:ABC-DEF...", hint="留空则保留原 Token。")}
+            {input_field("telegram_bot_token", "Bot Token", "", "password", placeholder="123456:ABC-DEF...", hint="留空则保留原 Token；重新粘贴新的 Token 会覆盖原 Token。")}
             {input_field("telegram_chat_id", "Chat ID", telegram.get("chat_id", ""), placeholder="例如：123456789 或 -100xxxxxxxxxx")}
           </div>
           {checkbox_field("telegram_disable_preview", "禁用链接预览", bool(telegram.get("disable_web_page_preview", True)))}
+          <div class="btn-list mt-2">
+            <button class="btn" type="submit" data-submit-button data-loading-text="正在保存...">保存 Telegram 设置</button>
+          </div>
+          <div class="mt-3">
+            <button class="btn btn-outline-primary" type="submit" form="telegram-discover-form">获取 Chat ID</button>
+            {render_chat_candidates(state)}
+          </div>
         </section>
 
         <section class="form-section">
@@ -2494,6 +2641,8 @@ def render_notifications_page(query: dict[str, list[str]] | None = None) -> byte
         <button class="btn btn-primary btn-submit ms-auto" type="submit" data-submit-button data-loading-text="正在保存...">保存通知设置</button>
       </div>
     </form>
+    <form id="telegram-discover-form" method="post" action="/notifications/telegram/discover"></form>
+    <form id="telegram-use-chat-form" method="post" action="/notifications/telegram/use-chat"></form>
     <div class="card mt-3">
       <div class="card-header"><h3 class="card-title">测试通知</h3></div>
       <div class="card-body">
@@ -2554,6 +2703,33 @@ def save_notifications(fields: dict[str, list[str]]) -> None:
             "use_tls": checked(fields, "smtp_use_tls"),
         },
     }
+    notifications.save_config(config)
+    state = notifications.load_state()
+    state.pop("telegram_last_error", None)
+    notifications.save_state(state)
+
+
+def discover_telegram_chats() -> bool:
+    state = notifications.load_state()
+    result = notifications.discover_telegram_chats()
+    if result.get("ok"):
+        candidates = result.get("candidates") or []
+        state["telegram_chat_candidates"] = candidates
+        state.pop("telegram_last_error", None)
+        config = notifications.load_config()
+        if len(candidates) == 1 and not config.get("telegram", {}).get("chat_id"):
+            config.setdefault("telegram", {})["chat_id"] = candidates[0].get("chat_id", "")
+            notifications.save_config(config)
+        notifications.save_state(state)
+        return True
+    state["telegram_last_error"] = str(result.get("error") or "Telegram getUpdates 失败")
+    notifications.save_state(state)
+    return False
+
+
+def use_telegram_chat(chat_id: str) -> None:
+    config = notifications.load_config()
+    config.setdefault("telegram", {})["chat_id"] = chat_id
     notifications.save_config(config)
 
 
@@ -2905,7 +3081,22 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/notifications/test":
             result = notifications.send_test_message()
+            state = notifications.load_state()
+            state["last_test_result"] = result
+            if not result.get("ok"):
+                state["telegram_last_error"] = str(result.get("error") or result.get("channels", {}).get("telegram", {}).get("error") or "测试通知发送失败")
+            else:
+                state.pop("telegram_last_error", None)
+            notifications.save_state(state)
             self.redirect("/notifications?flash=notify_test_sent" if result.get("ok") else "/notifications?flash=notify_test_failed")
+            return
+        if parsed.path == "/notifications/telegram/discover":
+            ok = discover_telegram_chats()
+            self.redirect("/notifications?flash=telegram_discovered" if ok else "/notifications?flash=telegram_discover_failed")
+            return
+        if parsed.path == "/notifications/telegram/use-chat":
+            use_telegram_chat(form_value(fields, "chat_id"))
+            self.redirect("/notifications?flash=telegram_chat_saved")
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")

@@ -130,6 +130,94 @@ def post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None 
         return {"ok": False, "error": str(exc)}
 
 
+def get_json(url: str, timeout: int = 12) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "AliyunCDTGuard/1.0"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            text = response.read().decode("utf-8")
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return {"ok": response.status < 400, "status": response.status, "body": text[:500]}
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        return {"ok": False, "status": exc.code, "error": body_text[:500]}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def mask_secret(value: str, keep: int = 4) -> str:
+    value = str(value or "")
+    if not value:
+        return ""
+    if len(value) <= keep * 2:
+        return "*" * len(value)
+    return f"{value[:keep]}...{value[-keep:]}"
+
+
+def telegram_status(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = config or load_config()
+    channel = config.get("telegram", {})
+    token = str(channel.get("bot_token") or "")
+    chat_id = str(channel.get("chat_id") or "")
+    return {
+        "enabled": bool(channel.get("enabled")),
+        "token_configured": bool(token),
+        "token_masked": mask_secret(token),
+        "chat_id": chat_id,
+        "ready": bool(config.get("enabled") and channel.get("enabled") and token and chat_id),
+    }
+
+
+def extract_chat_candidates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for update in updates:
+        message = (
+            update.get("message")
+            or update.get("edited_message")
+            or update.get("channel_post")
+            or update.get("my_chat_member")
+            or {}
+        )
+        chat = message.get("chat") or {}
+        chat_id = chat.get("id")
+        if chat_id is None:
+            continue
+        key = str(chat_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        title = chat.get("title") or " ".join(
+            part for part in [chat.get("first_name"), chat.get("last_name")] if part
+        )
+        rows.append(
+            {
+                "chat_id": key,
+                "type": chat.get("type") or "unknown",
+                "title": title or chat.get("username") or key,
+                "username": chat.get("username") or "",
+            }
+        )
+    return rows
+
+
+def discover_telegram_chats(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = config or load_config()
+    token = str(config.get("telegram", {}).get("bot_token") or "").strip()
+    if not token:
+        return {"ok": False, "error": "Telegram Bot Token 未填写"}
+    result = get_json(f"https://api.telegram.org/bot{token}/getUpdates")
+    if not result.get("ok"):
+        return {"ok": False, "error": result.get("description") or result.get("error") or "Telegram getUpdates 失败", "raw": result}
+    candidates = extract_chat_candidates(result.get("result") or [])
+    return {"ok": True, "candidates": candidates, "count": len(candidates)}
+
+
 def send_telegram(channel: dict[str, Any], title: str, message: str) -> dict[str, Any]:
     token = str(channel.get("bot_token") or "").strip()
     chat_id = str(channel.get("chat_id") or "").strip()
