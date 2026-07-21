@@ -485,6 +485,14 @@ def clear_session_cookie() -> str:
     return "cdt_guard_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
 
 
+def logout_marker_cookie() -> str:
+    return "cdt_guard_logged_out=1; Path=/; HttpOnly; SameSite=Lax; Max-Age=300"
+
+
+def clear_logout_marker_cookie() -> str:
+    return "cdt_guard_logged_out=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+
+
 def render_login_page(query: dict[str, list[str]] | None = None) -> bytes:
     query = query or {}
     flash = query.get("flash", [""])[0]
@@ -681,9 +689,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     refresh_meta = '<meta http-equiv="refresh" content="60">' if auto_refresh else ""
     header_actions = f"""
       {actions}
-      <form class="ms-2" method="post" action="/logout">
-        <button class="btn btn-sm" type="submit">退出登录</button>
-      </form>
+      <a class="logout-link" href="/logout" aria-label="退出登录">退出登录</a>
     """
     html_doc = f"""<!doctype html>
 <html lang="zh-CN">
@@ -882,6 +888,39 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       border-color: var(--accent);
       box-shadow: 0 8px 18px rgba(23, 99, 209, 0.18);
     }}
+    .page-actions {{
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+    }}
+    .logout-link {{
+      align-items: center;
+      background: #fff7f7;
+      border: 1px solid #f1b5b5;
+      border-radius: 8px;
+      color: #b42323;
+      display: inline-flex;
+      font-size: 13px;
+      font-weight: 720;
+      height: 38px;
+      justify-content: center;
+      line-height: 1;
+      padding: 0 14px;
+      text-decoration: none;
+      transition: background .15s ease, border-color .15s ease, box-shadow .15s ease, color .15s ease, transform .15s ease;
+      white-space: nowrap;
+    }}
+    .logout-link:hover {{
+      background: #fee2e2;
+      border-color: #e47a7a;
+      box-shadow: 0 8px 18px rgba(180, 35, 35, .10);
+      color: #8f1d1d;
+      text-decoration: none;
+      transform: translateY(-1px);
+    }}
+    .logout-link:active {{ transform: translateY(0); }}
     .run-check-form.is-submitting .btn {{
       cursor: wait;
       opacity: .85;
@@ -1698,7 +1737,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
             <h2 class="page-title">{esc(title)}</h2>
             <div class="text-secondary small">{esc(subtitle)}</div>
           </div>
-          <div class="navbar-nav flex-row order-md-last ms-auto">{header_actions}</div>
+          <div class="navbar-nav flex-row order-md-last ms-auto page-actions">{header_actions}</div>
         </div>
       </header>
       <div class="page-body">
@@ -3293,6 +3332,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/healthz":
             self.send_json({"ok": True})
             return
+        if parsed.path == "/logout":
+            self.handle_logout()
+            return
         if parsed.path == "/login":
             if self.is_authorized():
                 self.redirect("/")
@@ -3340,10 +3382,7 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_login(fields)
             return
         if parsed.path == "/logout":
-            self.send_response(HTTPStatus.SEE_OTHER)
-            self.send_header("Location", "/login?flash=logged_out")
-            self.send_header("Set-Cookie", clear_session_cookie())
-            self.end_headers()
+            self.handle_logout()
             return
         if not self.is_authorized():
             self.send_login_required()
@@ -3412,6 +3451,8 @@ class Handler(BaseHTTPRequestHandler):
             return False
         if self.is_session_authorized(username, password, env):
             return True
+        if cookie_parts(self.headers.get("Cookie", "")).get("cdt_guard_logged_out") == "1":
+            return False
         return self.is_basic_authorized(username, password)
 
     def is_basic_authorized(self, username: str, password: str) -> bool:
@@ -3449,9 +3490,18 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.SEE_OTHER)
             self.send_header("Location", "/")
             self.send_header("Set-Cookie", build_session_cookie(username, env, password))
+            self.send_header("Set-Cookie", clear_logout_marker_cookie())
             self.end_headers()
             return
         self.redirect("/login?flash=login_failed")
+
+    def handle_logout(self) -> None:
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Location", "/login?flash=logged_out")
+        self.send_header("Set-Cookie", clear_session_cookie())
+        self.send_header("Set-Cookie", logout_marker_cookie())
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
     def send_login_required(self):
         self.redirect("/login?flash=login_required")
