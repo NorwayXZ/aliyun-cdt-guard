@@ -245,6 +245,21 @@ def fmt_date(value) -> str:
         return str(value).split("T", 1)[0]
 
 
+def fmt_chinese_date(value) -> str:
+    if not value:
+        return "暂无"
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return f"{parsed.year}年{parsed.month}月{parsed.day}日"
+    except ValueError:
+        date_part = str(value).split("T", 1)[0].split(" ", 1)[0]
+        try:
+            year, month, day = [int(part) for part in date_part.split("-", 2)]
+            return f"{year}年{month}月{day}日"
+        except (TypeError, ValueError):
+            return str(value)
+
+
 def fmt_delta(value) -> str:
     if value is None:
         return "暂无变化数据"
@@ -303,15 +318,17 @@ def render_recovery_plan(item: dict) -> str:
     source = plan.get("reset_source")
     source_label = plan.get("reset_source_label") or ("BSS 账单 API" if source == "bss" else "配置推算")
     if source == "bss":
-        reset_hint = f"来源：{source_label} · 账期 {plan.get('billing_cycle') or '未知'} · {plan.get('billing_region_id') or ''}"
+        reset_hint = f"{source_label} · 账期 {plan.get('billing_cycle') or '未知'}"
+        reset_title = f"来源：{source_label}；账期：{plan.get('billing_cycle') or '未知'}；接口区域：{plan.get('billing_region_id') or '未知'}"
     else:
-        reset_hint = f"来源：{source_label} · 每月 {plan.get('traffic_reset_day') or 1} 日 00:00 UTC"
+        reset_hint = f"{source_label} · 每月 {plan.get('traffic_reset_day') or 1} 日"
+        reset_title = f"来源：{source_label}；按配置每月 {plan.get('traffic_reset_day') or 1} 日重置"
     return f"""
-      <div class="reset-summary {status_class}">
+      <div class="reset-summary {status_class}" title="{esc(reset_title)}">
         <div class="reset-main">
-          <div class="info-label">账期重置时间</div>
-          <div class="reset-time">{esc(fmt_time(plan.get('next_reset_at')))}</div>
-          <div class="text-secondary small">{esc(reset_hint)}</div>
+          <div class="reset-eyebrow">账期重置</div>
+          <div class="reset-time">{esc(fmt_chinese_date(plan.get('next_reset_at')))}</div>
+          <div class="reset-source">{esc(reset_hint)}</div>
         </div>
         <div class="reset-count">
           <div class="reset-duration">{esc(countdown_label)}</div>
@@ -1228,26 +1245,46 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     }}
     .reset-summary {{
       align-items: center;
-      background: var(--surface-soft);
+      background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
       border: 1px solid var(--line);
       border-radius: 8px;
       display: grid;
-      gap: 12px;
-      grid-template-columns: minmax(0, 1fr) 96px;
-      padding: 12px;
+      gap: 14px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      padding: 14px;
+    }}
+    .reset-summary.recovery-ok {{
+      background: linear-gradient(135deg, #f1fbf5 0%, #ffffff 100%);
+      border-color: #bde8ca;
+    }}
+    .reset-summary.recovery-paused {{
+      background: linear-gradient(135deg, #fff8e7 0%, #ffffff 100%);
+      border-color: #ffd98a;
+    }}
+    .reset-eyebrow {{
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 760;
+      margin-bottom: 6px;
     }}
     .reset-time {{
       color: #111827;
-      font-size: 16px;
+      font-size: 20px;
       font-weight: 760;
-      line-height: 1.35;
-      overflow-wrap: anywhere;
+      line-height: 1.2;
+    }}
+    .reset-source {{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      margin-top: 6px;
     }}
     .reset-count {{
       background: #fff;
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 10px 8px;
+      min-width: 118px;
+      padding: 10px 12px;
       text-align: center;
     }}
     .reset-foot {{
@@ -1562,10 +1599,11 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     }}
     .reset-duration {{
       color: #111827;
-      font-size: 18px;
+      font-size: 16px;
       font-weight: 760;
       line-height: 1.15;
-      overflow-wrap: anywhere;
+      overflow-wrap: normal;
+      white-space: nowrap;
     }}
     .recovery-unit {{
       color: var(--muted);
