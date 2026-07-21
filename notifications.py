@@ -159,19 +159,41 @@ def mask_secret(value: str, keep: int = 4) -> str:
     return f"{value[:keep]}...{value[-keep:]}"
 
 
+def split_chat_ids(value: Any) -> list[str]:
+    rows: list[str] = []
+    seen: set[str] = set()
+    text = str(value or "").replace(";", ",").replace("\n", ",")
+    for item in text.split(","):
+        chat_id = item.strip()
+        if not chat_id or chat_id in seen:
+            continue
+        rows.append(chat_id)
+        seen.add(chat_id)
+    return rows
+
+
+def join_chat_ids(chat_ids: list[str]) -> str:
+    return ",".join(split_chat_ids(",".join(chat_ids)))
+
+
+def add_chat_id(current: Any, chat_id: str) -> str:
+    return join_chat_ids([*split_chat_ids(current), chat_id])
+
+
 def telegram_status(config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = config or load_config()
     channel = config.get("telegram", {})
     token = str(channel.get("bot_token") or "")
-    chat_id = str(channel.get("chat_id") or "")
-    channel_ready = bool(channel.get("enabled") and token and chat_id)
+    chat_ids = split_chat_ids(channel.get("chat_id"))
+    channel_ready = bool(channel.get("enabled") and token and chat_ids)
     return {
         "enabled": bool(channel.get("enabled")),
         "token_configured": bool(token),
         "token_masked": mask_secret(token),
-        "chat_id": chat_id,
+        "chat_id": join_chat_ids(chat_ids),
+        "chat_ids": chat_ids,
         "ready": bool(config.get("enabled") and channel_ready),
-        "command_ready": bool(channel_ready and not chat_id.startswith("@")),
+        "command_ready": bool(channel_ready and any(not chat_id.startswith("@") for chat_id in chat_ids)),
     }
 
 
@@ -222,18 +244,26 @@ def discover_telegram_chats(config: dict[str, Any] | None = None) -> dict[str, A
 
 def send_telegram(channel: dict[str, Any], title: str, message: str) -> dict[str, Any]:
     token = str(channel.get("bot_token") or "").strip()
-    chat_id = str(channel.get("chat_id") or "").strip()
-    if not token or not chat_id:
+    chat_ids = split_chat_ids(channel.get("chat_id"))
+    if not token or not chat_ids:
         return {"ok": False, "error": "Telegram Bot Token 或 Chat ID 未填写"}
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    return post_json(
-        url,
-        {
-            "chat_id": chat_id,
-            "text": f"{title}\n\n{message}",
-            "disable_web_page_preview": bool(channel.get("disable_web_page_preview", True)),
-        },
-    )
+    results = []
+    for chat_id in chat_ids:
+        results.append(
+            {
+                "chat_id": chat_id,
+                "result": post_json(
+                    url,
+                    {
+                        "chat_id": chat_id,
+                        "text": f"{title}\n\n{message}",
+                        "disable_web_page_preview": bool(channel.get("disable_web_page_preview", True)),
+                    },
+                ),
+            }
+        )
+    return {"ok": any(item["result"].get("ok") for item in results), "chats": results}
 
 
 def send_telegram_to_chat(token: str, chat_id: str, text: str) -> dict[str, Any]:
@@ -506,8 +536,8 @@ def handle_telegram_commands(status: dict[str, Any], config: dict[str, Any], sta
         return []
     channel = config.get("telegram", {})
     token = str(channel.get("bot_token") or "").strip()
-    allowed_chat_id = str(channel.get("chat_id") or "").strip()
-    if allowed_chat_id.startswith("@"):
+    allowed_chat_ids = set(split_chat_ids(channel.get("chat_id")))
+    if not any(not chat_id.startswith("@") for chat_id in allowed_chat_ids):
         state["telegram_command_error"] = "Chat ID 是用户名格式，Telegram 命令需要数字 Chat ID。"
         return []
 
@@ -533,7 +563,7 @@ def handle_telegram_commands(status: dict[str, Any], config: dict[str, Any], sta
         chat_id = str((message.get("chat") or {}).get("id") or "")
         if not text.startswith("/"):
             continue
-        if chat_id != allowed_chat_id:
+        if chat_id not in allowed_chat_ids:
             if chat_id:
                 send_telegram_to_chat(token, chat_id, "这个机器人已绑定到其他 Chat ID，当前会话无权查询面板状态。")
             handled.append({"chat_id": chat_id, "command": text, "allowed": False})

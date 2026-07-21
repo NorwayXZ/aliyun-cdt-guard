@@ -433,7 +433,8 @@ def flash_message(code: str) -> str:
         "notify_test_failed": "测试通知发送失败，请检查配置",
         "telegram_discovered": "已获取 Telegram 会话，请选择或复制 Chat ID",
         "telegram_discover_failed": "获取 Telegram Chat ID 失败，请确认 Bot Token 正确且你已经给机器人发过消息",
-        "telegram_chat_saved": "Telegram Chat ID 已保存",
+        "telegram_chat_saved": "Telegram Chat ID 已追加到已保存渠道",
+        "telegram_chat_removed": "Telegram Chat ID 已移除",
         "login_required": "请先登录",
         "login_failed": "用户名或密码不正确",
         "logged_out": "已退出登录",
@@ -1545,6 +1546,79 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       line-height: 1.45;
       margin-top: 4px;
     }}
+    .saved-channel-grid {{
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      margin-top: 12px;
+    }}
+    .saved-channel-card {{
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+    }}
+    .saved-channel-head {{
+      align-items: center;
+      display: flex;
+      gap: 10px;
+      min-width: 0;
+    }}
+    .saved-channel-icon {{
+      align-items: center;
+      background: #eaf3ff;
+      border: 1px solid #cfe4ff;
+      border-radius: 8px;
+      color: #1763d1;
+      display: inline-flex;
+      flex: 0 0 38px;
+      font-size: 12px;
+      font-weight: 820;
+      height: 38px;
+      justify-content: center;
+      width: 38px;
+    }}
+    .saved-channel-title {{
+      color: #111827;
+      font-size: 14px;
+      font-weight: 820;
+      overflow-wrap: anywhere;
+    }}
+    .saved-channel-subtitle {{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }}
+    .saved-channel-meta {{
+      color: #374151;
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      line-height: 1.45;
+    }}
+    .saved-channel-badge {{
+      background: #f1f5f9;
+      border-radius: 999px;
+      color: #475569;
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 720;
+      justify-self: start;
+      padding: 4px 8px;
+    }}
+    .saved-channel-badge.is-on {{
+      background: #e8f8ee;
+      color: #177245;
+    }}
+    .saved-channel-actions {{
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      justify-content: space-between;
+    }}
     .log-layout {{ display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; }}
     .log-item summary {{ cursor: pointer; list-style: none; }}
     .log-item summary::-webkit-details-marker {{ display: none; }}
@@ -2598,19 +2672,121 @@ def yes_no(value: bool) -> str:
     return "已启用" if value else "未启用"
 
 
+def mask_middle(value: str, keep: int = 4) -> str:
+    value = str(value or "")
+    if len(value) <= keep * 2:
+        return value
+    return f"{value[:keep]}...{value[-keep:]}"
+
+
+def render_saved_notification_channels(config: dict, state: dict) -> str:
+    cards = []
+    telegram = config.get("telegram", {})
+    telegram_status = notifications.telegram_status(config)
+    for index, chat_id in enumerate(telegram_status.get("chat_ids") or [], start=1):
+        subtitle = "Telegram 私聊/群组/频道"
+        cards.append(
+            f"""
+            <div class="saved-channel-card">
+              <div class="saved-channel-head">
+                <div class="saved-channel-icon">TG</div>
+                <div>
+                  <div class="saved-channel-title">Telegram #{index}</div>
+                  <div class="saved-channel-subtitle">{esc(subtitle)}</div>
+                </div>
+              </div>
+              <div class="saved-channel-meta">
+                <div>Chat ID：{esc(mask_middle(chat_id))}</div>
+                <div>Bot Token：{esc(telegram_status.get("token_masked") or "未保存")}</div>
+                <div>主动查询：{esc("可用" if telegram_status.get("command_ready") and not str(chat_id).startswith("@") else "未就绪")}</div>
+              </div>
+              <div class="saved-channel-actions">
+                <span class="saved-channel-badge {'is-on' if config.get('enabled') and telegram.get('enabled') else ''}">{esc('发送中' if config.get('enabled') and telegram.get('enabled') else '未启用')}</span>
+                <button class="btn btn-sm" type="submit" name="chat_id" value="{esc(chat_id)}" form="telegram-remove-chat-form">移除</button>
+              </div>
+            </div>
+            """
+        )
+
+    webhook = config.get("webhook", {})
+    if webhook.get("url"):
+        cards.append(
+            f"""
+            <div class="saved-channel-card">
+              <div class="saved-channel-head">
+                <div class="saved-channel-icon">WH</div>
+                <div>
+                  <div class="saved-channel-title">Webhook</div>
+                  <div class="saved-channel-subtitle">{esc(mask_middle(webhook.get("url", ""), 14))}</div>
+                </div>
+              </div>
+              <div class="saved-channel-meta">
+                <div>用途：Bark、Server酱、飞书/企业微信中转</div>
+                <div>格式：POST JSON</div>
+              </div>
+              <span class="saved-channel-badge {'is-on' if config.get('enabled') and webhook.get('enabled') else ''}">{esc('发送中' if config.get('enabled') and webhook.get('enabled') else '未启用')}</span>
+            </div>
+            """
+        )
+
+    smtp = config.get("smtp", {})
+    if smtp.get("host") or smtp.get("recipients"):
+        cards.append(
+            f"""
+            <div class="saved-channel-card">
+              <div class="saved-channel-head">
+                <div class="saved-channel-icon">MAIL</div>
+                <div>
+                  <div class="saved-channel-title">SMTP 邮件</div>
+                  <div class="saved-channel-subtitle">{esc(smtp.get("host") or "未填写 SMTP 主机")}</div>
+                </div>
+              </div>
+              <div class="saved-channel-meta">
+                <div>收件人：{esc(smtp.get("recipients") or "未填写")}</div>
+                <div>端口：{esc(smtp.get("port") or 587)}</div>
+              </div>
+              <span class="saved-channel-badge {'is-on' if config.get('enabled') and smtp.get('enabled') else ''}">{esc('发送中' if config.get('enabled') and smtp.get('enabled') else '未启用')}</span>
+            </div>
+            """
+        )
+
+    if not cards:
+        cards.append(
+            """
+            <div class="saved-channel-card">
+              <div class="saved-channel-head">
+                <div class="saved-channel-icon">+</div>
+                <div>
+                  <div class="saved-channel-title">暂无已保存渠道</div>
+                  <div class="saved-channel-subtitle">在下面添加 Telegram、Webhook 或 SMTP 邮件后，会出现在这里。</div>
+                </div>
+              </div>
+            </div>
+            """
+        )
+
+    last_test = state.get("last_test_result") or {}
+    last_test_text = ""
+    if last_test:
+        last_test_text = f'<div class="text-secondary small mt-2">上次测试：{esc("成功" if last_test.get("ok") else "失败，请查看配置")}</div>'
+    return f"""
+      <section class="form-section">
+        <h3 class="form-section-title">已保存推送渠道</h3>
+        <div class="saved-channel-grid">{"".join(cards)}</div>
+        {last_test_text}
+      </section>
+    """
+
+
 def render_telegram_status(config: dict, state: dict) -> str:
     status = notifications.telegram_status(config)
     last_error = state.get("telegram_last_error", "")
     command_error = state.get("telegram_command_error", "")
     last_command = state.get("telegram_last_command") or {}
-    last_test = state.get("last_test_result") or {}
-    chat_id = str(status.get("chat_id") or "")
+    chat_ids = [str(item) for item in status.get("chat_ids") or []]
     chat_warning = ""
-    if chat_id.startswith("@"):
-        chat_warning = "当前 Chat ID 看起来像用户名。私聊通知通常需要纯数字 Chat ID，请给机器人发消息后点击“获取 Chat ID”。"
-    test_text = "暂无测试"
-    if last_test:
-        test_text = "成功" if last_test.get("ok") else f"失败：{last_test.get('error') or '请查看渠道配置'}"
+    if any(chat_id.startswith("@") for chat_id in chat_ids):
+        chat_warning = "有 Chat ID 看起来像用户名。私聊通知通常需要纯数字 Chat ID，请给机器人发消息后点击“获取 Chat ID”。"
     command_text = "暂无命令"
     if last_command:
         command_text = f"{last_command.get('command') or '未知命令'}，{'已回复' if last_command.get('ok') else '未回复'}"
@@ -2631,32 +2807,9 @@ def render_telegram_status(config: dict, state: dict) -> str:
         ]
     )
     return f"""
-      <div class="channel-status">
-        <div class="channel-status-item">
-          <div class="channel-status-label">通知总开关</div>
-          <div class="channel-status-value">{esc(yes_no(bool(config.get('enabled'))))}</div>
-        </div>
-        <div class="channel-status-item">
-          <div class="channel-status-label">Telegram 状态</div>
-          <div class="channel-status-value">{esc('可发送' if status.get('ready') else '未就绪')}</div>
-        </div>
-        <div class="channel-status-item">
-          <div class="channel-status-label">主动查询</div>
-          <div class="channel-status-value">{esc('可用' if status.get('command_ready') else '未就绪')}</div>
-        </div>
-        <div class="channel-status-item">
-          <div class="channel-status-label">Bot Token</div>
-          <div class="channel-status-value">{esc('已保存 ' + status.get('token_masked') if status.get('token_configured') else '未保存')}</div>
-        </div>
-        <div class="channel-status-item">
-          <div class="channel-status-label">Chat ID</div>
-          <div class="channel-status-value">{esc(status.get('chat_id') or '未填写')}</div>
-        </div>
-      </div>
       {f'<div class="alert alert-danger mb-3">{esc(last_error)}</div>' if last_error else ''}
       {f'<div class="alert alert-danger mb-3">{esc(command_error)}</div>' if command_error else ''}
       {f'<div class="alert alert-warning mb-3">{esc(chat_warning)}</div>' if chat_warning else ''}
-      <div class="text-secondary small mb-3">上次测试：{esc(test_text)}</div>
       <div class="text-secondary small mb-3">最近 Telegram 命令：{esc(command_text)}</div>
       <div class="setup-box">
         <strong>主动查询：</strong>保存 Telegram 配置后，在 Telegram 里直接发送下面任意命令即可获取面板数据。主动查询只做状态查看，不提供远程开关机。
@@ -2683,7 +2836,7 @@ def render_chat_candidates(state: dict) -> str:
                 <div class="text-secondary small">类型：{esc(chat_type)} {f'@{esc(username)}' if username else ''}</div>
                 <div class="chat-id-code">{esc(chat_id)}</div>
               </div>
-              <button class="btn btn-sm btn-primary" type="submit" name="chat_id" value="{esc(chat_id)}" form="telegram-use-chat-form">使用这个 Chat ID</button>
+              <button class="btn btn-sm btn-primary" type="submit" name="chat_id" value="{esc(chat_id)}" form="telegram-use-chat-form">追加这个 Chat ID</button>
             </div>
             """
         )
@@ -2708,8 +2861,10 @@ def render_notifications_page(query: dict[str, list[str]] | None = None) -> byte
         </div>
       </div>
       <div class="card-body notification-layout">
+        {render_saved_notification_channels(config, state)}
+
         <section class="form-section">
-          <h3 class="form-section-title">通知总开关</h3>
+          <h3 class="form-section-title">通知规则</h3>
           {checkbox_field("enabled", "启用通知系统", bool(config.get("enabled")), "关闭后不会发送 Telegram、Webhook 或邮件。")}
           <div class="credential-grid">
             {checkbox_field("notify_actions", "启停动作通知", bool(rules.get("notify_actions", True)), "自动停机、自动启动时发送。")}
@@ -2726,15 +2881,15 @@ def render_notifications_page(query: dict[str, list[str]] | None = None) -> byte
         </section>
 
         <section class="form-section">
-          <h3 class="form-section-title">Telegram</h3>
+          <h3 class="form-section-title">添加 Telegram</h3>
           {render_telegram_status(config, state)}
           <div class="setup-box">
-            <strong>获取 Chat ID：</strong>先填写 Bot Token 并保存；然后在 Telegram 给机器人发送任意一条消息；最后点击下面的“获取 Chat ID”。如果机器人在群组里，请先把机器人拉进群并在群里发一条消息。
+            <strong>获取 Chat ID：</strong>先填写 Bot Token 并保存；然后在 Telegram 给机器人发送任意一条消息；最后点击下面的“获取 Chat ID”。如果机器人在群组里，请先把机器人拉进群并在群里发一条消息。点击候选 Chat ID 会追加到已保存渠道，不会覆盖已有收件人。
           </div>
           {checkbox_field("telegram_enabled", "启用 Telegram Bot 通知", bool(telegram.get("enabled")), "从 BotFather 创建机器人，填 Bot Token；Chat ID 可以是个人、群组或频道。")}
           <div class="credential-grid">
             {input_field("telegram_bot_token", "Bot Token", "", "password", placeholder="123456:ABC-DEF...", hint="留空则保留原 Token；重新粘贴新的 Token 会覆盖原 Token。")}
-            {input_field("telegram_chat_id", "Chat ID", telegram.get("chat_id", ""), placeholder="例如：123456789 或 -100xxxxxxxxxx")}
+            {input_field("telegram_chat_id", "新增 Chat ID", "", placeholder="例如：123456789 或 -100xxxxxxxxxx", hint="已保存的 Chat ID 会显示在顶部；这里留空会保留原有收件人，填写后会追加一个新收件人。")}
           </div>
           {checkbox_field("telegram_disable_preview", "禁用链接预览", bool(telegram.get("disable_web_page_preview", True)))}
           <div class="btn-list mt-2">
@@ -2777,6 +2932,7 @@ def render_notifications_page(query: dict[str, list[str]] | None = None) -> byte
     </form>
     <form id="telegram-discover-form" method="post" action="/notifications/telegram/discover"></form>
     <form id="telegram-use-chat-form" method="post" action="/notifications/telegram/use-chat"></form>
+    <form id="telegram-remove-chat-form" method="post" action="/notifications/telegram/remove-chat"></form>
     <div class="card mt-3">
       <div class="card-header"><h3 class="card-title">测试通知</h3></div>
       <div class="card-body">
@@ -2805,6 +2961,8 @@ def checked(fields: dict[str, list[str]], name: str) -> bool:
 def save_notifications(fields: dict[str, list[str]]) -> None:
     existing = notifications.load_config()
     telegram_token = form_value(fields, "telegram_bot_token")
+    telegram_chat_id = form_value(fields, "telegram_chat_id")
+    existing_telegram = existing.get("telegram", {})
     smtp_password = form_value(fields, "smtp_password")
     config = {
         "enabled": checked(fields, "enabled"),
@@ -2818,8 +2976,8 @@ def save_notifications(fields: dict[str, list[str]]) -> None:
         },
         "telegram": {
             "enabled": checked(fields, "telegram_enabled"),
-            "bot_token": telegram_token or existing.get("telegram", {}).get("bot_token", ""),
-            "chat_id": form_value(fields, "telegram_chat_id"),
+            "bot_token": telegram_token or existing_telegram.get("bot_token", ""),
+            "chat_id": notifications.add_chat_id(existing_telegram.get("chat_id", ""), telegram_chat_id) if telegram_chat_id else existing_telegram.get("chat_id", ""),
             "disable_web_page_preview": checked(fields, "telegram_disable_preview"),
         },
         "webhook": {
@@ -2863,7 +3021,16 @@ def discover_telegram_chats() -> bool:
 
 def use_telegram_chat(chat_id: str) -> None:
     config = notifications.load_config()
-    config.setdefault("telegram", {})["chat_id"] = chat_id
+    telegram = config.setdefault("telegram", {})
+    telegram["chat_id"] = notifications.add_chat_id(telegram.get("chat_id", ""), chat_id)
+    notifications.save_config(config)
+
+
+def remove_telegram_chat(chat_id: str) -> None:
+    config = notifications.load_config()
+    telegram = config.setdefault("telegram", {})
+    remaining = [item for item in notifications.split_chat_ids(telegram.get("chat_id", "")) if item != chat_id]
+    telegram["chat_id"] = notifications.join_chat_ids(remaining)
     notifications.save_config(config)
 
 
@@ -3231,6 +3398,10 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/notifications/telegram/use-chat":
             use_telegram_chat(form_value(fields, "chat_id"))
             self.redirect("/notifications?flash=telegram_chat_saved")
+            return
+        if parsed.path == "/notifications/telegram/remove-chat":
+            remove_telegram_chat(form_value(fields, "chat_id"))
+            self.redirect("/notifications?flash=telegram_chat_removed")
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
