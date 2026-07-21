@@ -602,84 +602,79 @@ def render_login_page(query: dict[str, list[str]] | None = None) -> bytes:
     body {{
       min-height: 100vh;
       background:
-        linear-gradient(135deg, rgba(23, 99, 209, .10), rgba(20, 131, 65, .07)),
+        radial-gradient(circle at 50% 22%, rgba(34, 211, 238, .16), transparent 310px),
+        radial-gradient(circle at 50% 72%, rgba(23, 99, 209, .10), transparent 360px),
+        linear-gradient(135deg, rgba(23, 99, 209, .08), rgba(20, 131, 65, .06)),
         #f6f7f9;
       color: var(--ink);
       -webkit-font-smoothing: antialiased;
     }}
     .login-shell {{
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 420px;
       min-height: 100vh;
-    }}
-    .login-brand {{
-      align-content: center;
-      display: grid;
-      padding: 56px;
-    }}
-    .brand-mark {{
-      background: #111827;
-      border-radius: 8px;
-      color: #fff;
-      display: inline-grid;
-      font-weight: 760;
-      height: 44px;
-      margin-bottom: 26px;
+      padding: 34px 20px;
       place-items: center;
-      width: 44px;
-    }}
-    .login-title {{
-      font-size: 34px;
-      font-weight: 760;
-      line-height: 1.18;
-      margin: 0 0 14px;
-      max-width: 620px;
-    }}
-    .login-copy {{
-      color: var(--muted);
-      font-size: 15px;
-      line-height: 1.7;
-      max-width: 600px;
-    }}
-    .feature-strip {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 28px;
-    }}
-    .feature-pill {{
-      background: rgba(255,255,255,.72);
-      border: 1px solid rgba(229,231,235,.86);
-      border-radius: 999px;
-      color: #475569;
-      font-size: 12px;
-      font-weight: 720;
-      padding: 7px 10px;
     }}
     .login-panel {{
-      align-content: center;
-      background: rgba(255,255,255,.84);
-      border-left: 1px solid rgba(229,231,235,.9);
-      box-shadow: -20px 0 60px rgba(15, 23, 42, .06);
-      display: grid;
-      padding: 38px;
+      width: min(460px, 100%);
     }}
     .login-card {{
-      background: #fff;
+      background: rgba(255, 255, 255, .94);
       border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: 0 18px 52px rgba(15, 23, 42, .08);
-      padding: 26px;
+      border-radius: 14px;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, .12);
+      padding: 34px;
+    }}
+    .login-logo {{
+      display: grid;
+      justify-items: center;
+      margin-bottom: 24px;
+      text-align: center;
+    }}
+    .login-logo .brand-lockup {{
+      align-items: center;
+      display: grid;
+      justify-items: center;
+    }}
+    .login-logo .brand-mark {{
+      height: 104px;
+      width: 104px;
+      filter: drop-shadow(0 18px 28px rgba(23, 99, 209, .24));
+      margin-bottom: 12px;
+    }}
+    .login-logo .brand-text {{
+      display: grid;
+      gap: 4px;
+      justify-items: center;
+    }}
+    .login-logo .brand-name {{
+      color: #111827;
+      font-size: 24px;
+      font-weight: 840;
+      line-height: 1.05;
+    }}
+    .login-logo .brand-name span {{
+      color: #1763d1;
+    }}
+    .login-logo .brand-subtitle {{
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 780;
+      letter-spacing: .08em;
+      line-height: 1.1;
+      text-transform: uppercase;
     }}
     .login-card h1 {{
-      font-size: 22px;
-      font-weight: 760;
+      font-size: 26px;
+      font-weight: 820;
       margin: 0 0 6px;
+      text-align: center;
     }}
     .login-card .sub {{
       color: var(--muted);
       font-size: 13px;
-      margin-bottom: 22px;
+      margin-bottom: 24px;
+      text-align: center;
     }}
     .form-control {{
       border-color: #d6d9df;
@@ -711,33 +706,22 @@ def render_login_page(query: dict[str, list[str]] | None = None) -> bytes:
       color: var(--muted);
       font-size: 12px;
       line-height: 1.6;
-      margin-top: 16px;
+      margin-top: 18px;
+      text-align: center;
     }}
     @media (max-width: 900px) {{
-      .login-shell {{ grid-template-columns: 1fr; }}
-      .login-brand {{ padding: 34px 22px 14px; }}
-      .login-panel {{ border-left: 0; box-shadow: none; padding: 22px; }}
-      .login-title {{ font-size: 28px; }}
+      .login-shell {{ padding: 22px; }}
+      .login-card {{ padding: 28px 22px; }}
+      .login-logo .brand-mark {{ height: 88px; width: 88px; }}
+      .login-logo .brand-name {{ font-size: 22px; }}
     }}
   </style>
 </head>
 <body>
   <main class="login-shell">
-    <section class="login-brand">
-      <div>
-        <div class="brand-mark">CDT</div>
-        <h1 class="login-title">Aliyun CDT Guard</h1>
-        <p class="login-copy">集中管理阿里云 ECS、CDT 共享流量池、自动启停保护、历史曲线和通知报告。适合用域名反代后作为长期运维面板。</p>
-        <div class="feature-strip">
-          <span class="feature-pill">CDT 共享池保护</span>
-          <span class="feature-pill">ECS 启停控制</span>
-          <span class="feature-pill">Telegram 通知</span>
-          <span class="feature-pill">每日流量报告</span>
-        </div>
-      </div>
-    </section>
     <section class="login-panel">
       <form class="login-card" method="post" action="/login">
+        <div class="login-logo">{render_brand_logo()}</div>
         <h1>登录面板</h1>
         <div class="sub">请输入安装时生成的后台账号密码</div>
         {flash_html}
