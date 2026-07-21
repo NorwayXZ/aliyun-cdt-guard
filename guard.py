@@ -126,7 +126,11 @@ def get_client(region_id: str, access_key_id: str | None = None, access_key_secr
     )
 
 
-def get_total_traffic_gb(client: AcsClient, traffic_region_id: str | None = None) -> float:
+def bytes_to_gb(value: int | str | None) -> float:
+    return int(value or 0) / (1024 ** 3)
+
+
+def get_traffic_report(client: AcsClient, traffic_region_id: str | None = None) -> dict[str, Any]:
     request = CommonRequest()
     request.set_domain("cdt.aliyuncs.com")
     request.set_version("2021-08-13")
@@ -136,7 +140,8 @@ def get_total_traffic_gb(client: AcsClient, traffic_region_id: str | None = None
 
     response = client.do_action_with_exception(request)
     response_json = json.loads(response.decode("utf-8"))
-    traffic_details = response_json.get("TrafficDetails", [])
+    all_details = response_json.get("TrafficDetails", [])
+    traffic_details = all_details
 
     if traffic_region_id:
         traffic_details = [
@@ -145,7 +150,45 @@ def get_total_traffic_gb(client: AcsClient, traffic_region_id: str | None = None
         ]
 
     total_bytes = sum(int(item.get("Traffic", 0) or 0) for item in traffic_details)
-    return total_bytes / (1024 ** 3)
+    products: dict[str, int] = {}
+    regions = []
+
+    for detail in traffic_details:
+        product_details = detail.get("ProductTrafficDetails") or []
+        for product_detail in product_details:
+            product = str(product_detail.get("Product") or "unknown")
+            products[product] = products.get(product, 0) + int(product_detail.get("Traffic", 0) or 0)
+        regions.append(
+            {
+                "region_id": detail.get("BusinessRegionId"),
+                "isp_type": detail.get("ISPType"),
+                "traffic_bytes": int(detail.get("Traffic", 0) or 0),
+                "traffic_gb": bytes_to_gb(detail.get("Traffic")),
+            }
+        )
+
+    product_rows = [
+        {
+            "product": product,
+            "traffic_bytes": traffic_bytes,
+            "traffic_gb": bytes_to_gb(traffic_bytes),
+        }
+        for product, traffic_bytes in sorted(products.items())
+    ]
+
+    return {
+        "request_id": response_json.get("RequestId"),
+        "traffic_bytes": total_bytes,
+        "traffic_gb": bytes_to_gb(total_bytes),
+        "detail_count": len(all_details),
+        "matched_detail_count": len(traffic_details),
+        "products": product_rows,
+        "regions": regions,
+    }
+
+
+def get_total_traffic_gb(client: AcsClient, traffic_region_id: str | None = None) -> float:
+    return get_traffic_report(client, traffic_region_id)["traffic_gb"]
 
 
 def describe_instance(client: AcsClient, instance_id: str) -> dict[str, Any] | None:
@@ -255,8 +298,13 @@ def run_guard() -> dict[str, Any]:
     if not raw_instances:
         raise RuntimeError("instances.json has no instances")
 
+    previous_status = read_status() or {}
+    previous_by_id = {
+        str(item.get("id")): item
+        for item in previous_status.get("instances", [])
+    }
     client_cache: dict[str, AcsClient] = {}
-    traffic_cache: dict[tuple[str, str], float] = {}
+    traffic_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
 
@@ -325,8 +373,13 @@ def run_guard() -> dict[str, Any]:
                     get_client(region_id, item["access_key_id"], item["access_key_secret"]),
                 )
                 if key not in traffic_cache:
-                    traffic_cache[key] = get_total_traffic_gb(client, traffic_region_id)
-                traffic_gb = traffic_cache[key]
+                    traffic_cache[key] = get_traffic_report(client, traffic_region_id)
+                traffic_report = traffic_cache[key]
+                traffic_gb = float(traffic_report["traffic_gb"])
+                previous_traffic = previous_by_id.get(str(item["id"]), {}).get("traffic_gb")
+                traffic_delta_gb = None
+                if previous_traffic is not None:
+                    traffic_delta_gb = traffic_gb - float(previous_traffic)
 
                 instance = describe_instance(client, item["instance_id"])
                 ecs_status = instance.get("Status") if instance else None
@@ -347,6 +400,12 @@ def run_guard() -> dict[str, Any]:
                 result.update(
                     {
                         "traffic_gb": traffic_gb,
+                        "traffic_delta_gb": traffic_delta_gb,
+                        "traffic_request_id": traffic_report.get("request_id"),
+                        "traffic_detail_count": traffic_report.get("detail_count"),
+                        "traffic_matched_detail_count": traffic_report.get("matched_detail_count"),
+                        "traffic_products": traffic_report.get("products", []),
+                        "traffic_regions": traffic_report.get("regions", []),
                         "remaining_gb": remaining_gb,
                         "used_pct": used_pct,
                         "warning": warning,
@@ -383,6 +442,8 @@ def run_guard() -> dict[str, Any]:
                     "id": result["id"],
                     "label": result["label"],
                     "traffic_gb": result.get("traffic_gb"),
+                    "traffic_delta_gb": result.get("traffic_delta_gb"),
+                    "traffic_products": result.get("traffic_products"),
                     "status": result.get("instance_status"),
                     "action": result.get("action"),
                     "reason": result.get("reason"),

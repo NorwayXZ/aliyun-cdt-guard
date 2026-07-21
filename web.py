@@ -106,6 +106,17 @@ def fmt_time(value) -> str:
     return text.replace("T", " ").replace("+00:00", " UTC")
 
 
+def fmt_delta(value) -> str:
+    if value is None:
+        return "暂无变化数据"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "暂无变化数据"
+    sign = "+" if number > 0 else ""
+    return f"{sign}{number:.2f} GB"
+
+
 def form_value(fields: dict[str, list[str]], name: str, default: str = "") -> str:
     value = fields.get(name, [default])[0]
     return value.strip()
@@ -459,6 +470,10 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       border-color: var(--accent);
       box-shadow: 0 8px 18px rgba(23, 99, 209, 0.18);
     }}
+    .run-check-form.is-submitting .btn {{
+      cursor: wait;
+      opacity: .85;
+    }}
     .asset-workspace {{
       display: grid;
       gap: 16px;
@@ -628,6 +643,38 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       color: #111827;
       font-size: 18px;
       font-weight: 720;
+    }}
+    .traffic-delta {{
+      border-radius: 999px;
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 720;
+      padding: 3px 8px;
+    }}
+    .traffic-delta.up {{ background: var(--warning-soft); color: #b7791f; }}
+    .traffic-delta.flat {{ background: #eef2f6; color: #64748b; }}
+    .traffic-delta.down {{ background: var(--success-soft); color: #148341; }}
+    .breakdown-list {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }}
+    .breakdown-row {{
+      align-items: center;
+      border-top: 1px solid var(--line);
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
+      padding: 10px 12px;
+    }}
+    .breakdown-row:first-child {{ border-top: 0; }}
+    .product-code {{
+      background: #eef2f6;
+      border-radius: 6px;
+      color: #475569;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      padding: 2px 6px;
     }}
     .traffic-compact {{
       min-width: 0;
@@ -963,8 +1010,26 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
         }});
       }});
     }}
+    function initRunCheckForms() {{
+      document.querySelectorAll("[data-run-check-form]").forEach((form) => {{
+        form.addEventListener("submit", (event) => {{
+          if (form.dataset.submitting === "1") {{
+            event.preventDefault();
+            return;
+          }}
+          form.dataset.submitting = "1";
+          form.classList.add("is-submitting");
+          const button = form.querySelector("[data-run-check-button]");
+          if (button) {{
+            button.disabled = true;
+            button.textContent = button.dataset.loadingText || "正在检查...";
+          }}
+        }});
+      }});
+    }}
     document.addEventListener("DOMContentLoaded", initAssetBoard);
     document.addEventListener("DOMContentLoaded", initSaveForms);
+    document.addEventListener("DOMContentLoaded", initRunCheckForms);
   </script>
 </body>
 </html>
@@ -975,8 +1040,8 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
 def render_check_action() -> str:
     return """
     <div>
-      <form method="post" action="/guard/run">
-        <button class="btn btn-primary" type="submit" title="马上查询 CDT 流量和 ECS 状态，并按阈值执行一次保护判断">手动检查流量</button>
+      <form class="run-check-form" method="post" action="/guard/run" data-run-check-form>
+        <button class="btn btn-primary" type="submit" title="马上查询 CDT 流量和 ECS 状态，并按阈值执行一次保护判断" data-run-check-button data-loading-text="正在检查...">手动检查流量</button>
       </form>
     </div>
     """
@@ -1099,6 +1164,59 @@ def sparkline_svg(values: list[float]) -> str:
     return f'<svg class="sparkline" viewBox="0 0 {width} {height}" aria-hidden="true"><polygon class="area" points="{area}"></polygon><path d="M {line}"></path></svg>'
 
 
+def product_label(product: str) -> str:
+    labels = {
+        "eip": "弹性公网 IP",
+        "publicip": "固定公网 IP",
+        "cbwp": "共享带宽包",
+        "nat": "NAT 网关",
+        "slb": "负载均衡",
+    }
+    return labels.get(product, product or "未知产品")
+
+
+def traffic_delta_badge(value) -> str:
+    if value is None:
+        return '<span class="traffic-delta flat">暂无上次对比</span>'
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return '<span class="traffic-delta flat">暂无上次对比</span>'
+    if number > 0.005:
+        return f'<span class="traffic-delta up">本次 +{number:.2f} GB</span>'
+    if number < -0.005:
+        return f'<span class="traffic-delta down">本次 {number:.2f} GB</span>'
+    return '<span class="traffic-delta flat">本次无变化</span>'
+
+
+def render_traffic_breakdown(item: dict) -> str:
+    products = item.get("traffic_products") or []
+    if not products:
+        return '<div class="text-secondary small">暂无 CDT 产品明细。新版本首次检查后会显示。</div>'
+    rows = []
+    for product in products:
+        code = str(product.get("product") or "unknown")
+        rows.append(
+            f"""
+            <div class="breakdown-row">
+              <div>
+                <div class="fw-semibold">{esc(product_label(code))}</div>
+                <div class="asset-sub"><span class="product-code">{esc(code)}</span></div>
+              </div>
+              <div class="fw-semibold">{fmt_gb(product.get('traffic_gb'))}</div>
+            </div>
+            """
+        )
+    request_id = item.get("traffic_request_id")
+    request_line = f'<div class="text-secondary small mt-2">CDT API RequestId：{esc(request_id)}</div>' if request_id else ""
+    matched = item.get("traffic_matched_detail_count")
+    total = item.get("traffic_detail_count")
+    count_line = ""
+    if matched is not None and total is not None:
+        count_line = f'<div class="text-secondary small mt-2">区域匹配 {esc(matched)} / {esc(total)} 条明细</div>'
+    return f'<div class="breakdown-list">{"".join(rows)}</div>{count_line}{request_line}'
+
+
 def render_server_row(item: dict, metadata: dict[str, dict], history: list[dict], active: bool = False) -> str:
     identity = server_identity(item, metadata)
     state_class, state_label, state_sub = status_view(item.get("instance_status"))
@@ -1147,6 +1265,7 @@ def render_server_row(item: dict, metadata: dict[str, dict], history: list[dict]
               <span class="text-secondary small">{pct:.0f}%</span>
             </span>
             <span class="progress"><span class="progress-bar {progress_class(item)}" style="width:{pct:.2f}%"></span></span>
+            <span class="asset-sub d-block mt-1">{esc(fmt_delta(item.get('traffic_delta_gb')))}</span>
             {sparkline_svg(traffic_values(identity['id'], history, item.get('traffic_gb')))}
           </span>
         </span>
@@ -1205,6 +1324,11 @@ def render_server_detail(item: dict, metadata: dict[str, dict], active: bool = F
             <span>剩余 {fmt_gb(item.get('remaining_gb'))}</span>
             <span>{pct:.0f}% 已用</span>
           </div>
+          <div class="mt-2">{traffic_delta_badge(item.get('traffic_delta_gb'))}</div>
+        </div>
+        <div class="detail-section">
+          <div class="info-label">CDT 计费明细</div>
+          {render_traffic_breakdown(item)}
         </div>
         <div class="detail-section">
           <div class="info-label">当前判断</div>
