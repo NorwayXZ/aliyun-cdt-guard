@@ -1,0 +1,16 @@
+[Unit]
+Description=Aliyun CDT Guard web dashboard
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/aliyun-cdt-guard
+ExecStart=/usr/bin/python3 /opt/aliyun-cdt-guard/web.py
+Restart=always
+RestartSec=3
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

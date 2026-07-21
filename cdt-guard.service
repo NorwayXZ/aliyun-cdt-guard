@@ -1,0 +1,11 @@
+[Unit]
+Description=Aliyun CDT Guard check
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/aliyun-cdt-guard
+ExecStart=/opt/aliyun-cdt-guard/venv/bin/python /opt/aliyun-cdt-guard/guard.py run
+User=root
+Group=root
