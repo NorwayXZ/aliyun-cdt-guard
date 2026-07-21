@@ -4173,27 +4173,6 @@ server {{
         </div>
       </div>
     </div>
-
-    <div class="card mt-3">
-      <div class="card-header"><h3 class="card-title">一键应用到本机 Caddy</h3></div>
-      <div class="card-body">
-        <div class="proxy-step-grid">
-          <div class="proxy-step-card">
-            <strong>Caddy 状态</strong>
-            <span>{'已安装' if caddy_installed else '未安装'} · {esc(caddy_state)}</span>
-          </div>
-          <div class="proxy-step-card">
-            <strong>会执行什么</strong>
-            <span>安装 Caddy、备份 /etc/caddy/Caddyfile、写入当前域名反代、重启 Caddy，并把 web.env 设置为 WEB_COOKIE_SECURE=true。</span>
-          </div>
-          <div class="proxy-step-card">
-            <strong>前置条件</strong>
-            <span>Cloudflare DNS 已把 {esc(domain)} 指向 {esc(origin_ip)}，服务器安全组/防火墙放行 80 和 443。</span>
-          </div>
-        </div>
-        <button class="btn btn-primary mt-3" type="submit" form="domain-config-form" formaction="/domain/apply" onclick="return confirm('确认在本机安装/重启 Caddy 并写入反代配置？请先确认 DNS 已指向本机，80/443 已放行。')">保存并应用 Caddy</button>
-      </div>
-    </div>
     """
     return page_shell(
         "domain",
