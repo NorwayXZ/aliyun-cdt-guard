@@ -404,7 +404,11 @@ def traffic_pool_id(item: dict[str, Any]) -> str:
 
 
 def has_custom_traffic_pool_id(item: dict[str, Any]) -> bool:
-    return bool(str(item.get("traffic_pool_id") or "").strip())
+    pool_id = str(item.get("traffic_pool_id") or "").strip()
+    if not pool_id:
+        return False
+    scope = normalize_traffic_scope(item.get("traffic_scope"))
+    return pool_id != default_traffic_pool_id(scope, item.get("traffic_region_id"))
 
 
 def traffic_pool_key(item: dict[str, Any]) -> str:

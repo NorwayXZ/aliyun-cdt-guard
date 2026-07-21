@@ -260,6 +260,10 @@ def traffic_scope_label(scope: str | None) -> str:
     return TRAFFIC_SCOPE_LABELS.get(scope or TRAFFIC_SCOPE_REGION, TRAFFIC_SCOPE_LABELS[TRAFFIC_SCOPE_REGION])
 
 
+def normalize_traffic_scope(scope: str | None) -> str:
+    return scope if scope in TRAFFIC_SCOPE_LABELS else TRAFFIC_SCOPE_REGION
+
+
 def traffic_pool_text(item: dict) -> str:
     pool_id = item.get("traffic_pool_id") or item.get("traffic_region_id") or "默认池"
     return f"{traffic_scope_label(item.get('traffic_scope'))} / {pool_id}"
@@ -955,6 +959,22 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       white-space: nowrap;
     }}
     .form-doc-link:hover {{ text-decoration: underline; }}
+    .pool-option-list {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }}
+    .pool-option-chip {{
+      background: #f4f7fb;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: #42526b;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+      padding: 6px 9px;
+    }}
     .ip-main {{
       color: #111827;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -2850,11 +2870,13 @@ def render_dashboard(query: dict[str, list[str]] | None = None) -> bytes:
 def render_server_form_page(query: dict[str, list[str]] | None = None) -> bytes:
     query = query or {}
     config = read_config()
+    status = read_json(STATUS_FILE, {"instances": []})
     edit_id = query.get("id", [""])[0]
     editing = selected_instance(config, edit_id)
+    pool_options = collect_traffic_pool_options(config, status)
     body = f"""
     <div class="form-layout">
-      <div>{render_form(editing)}</div>
+      <div>{render_form(editing, pool_options)}</div>
       {render_form_guide()}
     </div>
     """
@@ -3432,6 +3454,81 @@ def select_field(name: str, label: str, value: str, options: list[tuple[str, str
     )
 
 
+def collect_traffic_pool_options(config: dict, status: dict) -> list[tuple[str, str]]:
+    status_by_id = {str(item.get("id") or ""): item for item in status.get("instances", [])}
+    pools: dict[str, dict[str, Any]] = {}
+    account_scopes = {TRAFFIC_SCOPE_ACCOUNT_NON_CHINA, TRAFFIC_SCOPE_ACCOUNT_ALL}
+
+    def add_pool(pool_id: str, scope: str | None, name: str, source: str, member_key: str) -> None:
+        pool_id = str(pool_id or "").strip()
+        scope = normalize_traffic_scope(scope)
+        if not pool_id or (source == "auto" and scope not in account_scopes):
+            return
+        pool = pools.setdefault(pool_id, {"members": set(), "scopes": set(), "names": [], "sources": set()})
+        member_key = member_key or f"{pool_id}:{name}"
+        if member_key in pool["members"]:
+            return
+        pool["members"].add(member_key)
+        pool["scopes"].add(traffic_scope_label(scope))
+        pool["sources"].add(source)
+        if name:
+            pool["names"].append(name)
+
+    for item in config.get("instances", []):
+        server_id = str(item.get("id") or "")
+        status_item = status_by_id.get(server_id, {})
+        pool_id = str(item.get("traffic_pool_id") or "").strip()
+        name = first_value(item.get("product_name"), item.get("label"), item.get("instance_id"), server_id)
+        if pool_id:
+            add_pool(pool_id, item.get("traffic_scope") or status_item.get("traffic_scope"), name, "custom", server_id)
+
+    for item in status.get("instances", []):
+        server_id = str(item.get("id") or "")
+        pool_id = str(item.get("traffic_pool_id") or "").strip()
+        name = first_value(item.get("product_name"), item.get("label"), item.get("instance_name"), item.get("id"))
+        source = "custom" if item.get("traffic_pool_custom") else "auto"
+        add_pool(pool_id, item.get("traffic_scope"), name, source, server_id)
+
+    options = []
+    for pool_id, info in pools.items():
+        scope_text = "、".join(sorted(info["scopes"]))
+        name_preview = "、".join([name for name in info["names"] if name][:2])
+        source_text = "手动分组" if "custom" in info["sources"] else "自动共享池"
+        label = f"{pool_id} · {source_text} · 已有 {len(info['members'])} 台"
+        if scope_text:
+            label += f" · {scope_text}"
+        if name_preview:
+            label += f" · {name_preview}"
+        options.append((pool_id, label))
+    return sorted(options, key=lambda item: item[0].lower())
+
+
+def traffic_pool_field(name: str, value: str, pool_options: list[tuple[str, str]]) -> str:
+    list_id = f"{name}-options"
+    option_html = "".join(
+        f'<option value="{esc(pool_id)}" label="{esc(label)}">{esc(label)}</option>'
+        for pool_id, label in pool_options
+    )
+    chips = "".join(
+        f'<span class="pool-option-chip">{esc(pool_id)}</span>'
+        for pool_id, _ in pool_options[:8]
+    )
+    if chips:
+        chips = f'<div class="pool-option-list">{chips}</div>'
+    hint = "选择已有分组，或留空让面板按 AccessKey 和统计方式自动归组。只有多个 RAM AccessKey 需要合并统计时，才建议手动填同一个分组名。"
+    if not pool_options:
+        hint += " 当前还没有可选择的共享池；第一次先留空，选择“账号非中国内地共享池”并保存巡检后，后续新增机器会出现可选分组。"
+    return f"""
+      <div class="mb-3">
+        <label class="form-label">流量池分组（可选）</label>
+        <input class="form-control" type="text" name="{esc(name)}" value="{esc(value)}" placeholder="留空自动归组；也可选择已有分组" list="{esc(list_id)}">
+        <datalist id="{esc(list_id)}">{option_html}</datalist>
+        <div class="form-hint">{esc(hint)}</div>
+        {chips}
+      </div>
+    """
+
+
 def checkbox_field(name: str, label: str, checked: bool, hint: str = "") -> str:
     hint_html = f'<div class="form-hint">{esc(hint)}</div>' if hint else ""
     return f"""
@@ -3472,7 +3569,7 @@ def render_form_guide() -> str:
         </div>
         <div class="guide-step">
           <strong>6. 共享池不用去阿里云找 ID</strong>
-          <span>“流量池分组名”是面板内部分组：同一阿里云账号共享 CDT 额度时，选择共享池即可；留空会按 AccessKey 自动归组。</span>
+          <span>“流量池分组”是面板内部分组：同一阿里云账号共享 CDT 额度时，新增机器可选择已有分组；不确定就留空自动归组。</span>
         </div>
         <div class="guide-step">
           <strong>7. 账期优先走 BSS</strong>
@@ -3487,7 +3584,8 @@ def render_form_guide() -> str:
     """
 
 
-def render_form(item: dict) -> str:
+def render_form(item: dict, pool_options: list[tuple[str, str]] | None = None) -> str:
+    pool_options = pool_options or []
     is_edit = bool(item)
     title = "编辑服务器" if is_edit else "新增服务器"
     id_value = item.get("id", "")
@@ -3552,7 +3650,7 @@ def render_form(item: dict) -> str:
                 (TRAFFIC_SCOPE_ACCOUNT_NON_CHINA, "账号非中国内地共享池"),
                 (TRAFFIC_SCOPE_ACCOUNT_ALL, "账号全部 CDT 流量"),
             ], "香港、日本、新加坡等机器共享同一账号额度时，建议选“账号非中国内地共享池”。")}
-            {input_field("traffic_pool_id", "流量池分组名（可选）", item.get("traffic_pool_id", ""), placeholder="可留空；例如：global-200g", hint="这不是阿里云提供的 ID，而是面板内部自定义分组名。同一组机器填同一个；留空会按 AccessKey 和统计方式自动归组。")}
+            {traffic_pool_field("traffic_pool_id", item.get("traffic_pool_id", ""), pool_options)}
           </div>
         </details>
         <details class="form-section detail-disclosure"{advanced_open}>
