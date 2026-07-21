@@ -863,6 +863,51 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       line-height: 1.35;
     }}
     .asset-sub {{ color: var(--muted); font-size: 12px; margin-top: 3px; }}
+    .server-name-stack {{
+      display: block;
+      max-width: 100%;
+      min-width: 0;
+    }}
+    .account-balance-line {{
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 7px;
+      min-width: 0;
+    }}
+    .account-key {{
+      color: #667085;
+      flex: 0 1 auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      max-width: 100%;
+      min-width: 0;
+    }}
+    .account-balance-pill {{
+      align-items: center;
+      background: #edf7f1;
+      border: 1px solid #cfe8d8;
+      border-radius: 999px;
+      color: #14733a;
+      display: inline-flex;
+      font-size: 11px;
+      font-weight: 720;
+      line-height: 1;
+      max-width: 100%;
+      padding: 5px 8px;
+      white-space: nowrap;
+    }}
+    .account-balance-pill.is-warning {{
+      background: #fff7e6;
+      border-color: #f4d18b;
+      color: #9a6700;
+    }}
+    .account-balance-pill.is-danger {{
+      background: #fff0f0;
+      border-color: #f3b5b5;
+      color: #b42323;
+    }}
     .ip-main {{
       color: #111827;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -2250,6 +2295,56 @@ def money_text(amount, currency: str | None) -> str:
         return f"{amount} {currency or ''}".strip()
 
 
+def balance_amount_level(amount) -> str:
+    try:
+        number = float(amount)
+    except (TypeError, ValueError):
+        return "is-warning"
+    if number <= 0:
+        return "is-danger"
+    if number < 10:
+        return "is-warning"
+    return ""
+
+
+def render_server_account_balance(item: dict) -> str:
+    account_key = str(item.get("account_fingerprint") or "").strip()
+    balance = item.get("account_balance") or {}
+    if not account_key and not balance:
+        return ""
+
+    account_label = f"阿里云账号 {account_key}" if account_key else "阿里云账号 未识别"
+    source = balance.get("source")
+    if source == "bss":
+        amount = money_text(balance.get("available_amount"), balance.get("currency"))
+        cash = money_text(balance.get("available_cash_amount"), balance.get("currency"))
+        level = balance_amount_level(balance.get("available_amount"))
+        pill_class = f"account-balance-pill {level}".strip()
+        title = f"阿里云账户余额：{amount}；现金余额：{cash}；来源：{balance.get('source_label') or 'BSS 账单 API'}"
+        return f"""
+          <span class="account-balance-line" title="{esc(title)}">
+            <span class="account-key text-truncate">{esc(account_label)}</span>
+            <span class="{pill_class}">余额 {esc(amount)}</span>
+          </span>
+        """
+
+    if source == "error":
+        error = str(balance.get("error") or "请检查 AliyunBSSReadOnlyAccess 权限")
+        return f"""
+          <span class="account-balance-line" title="{esc(error)}">
+            <span class="account-key text-truncate">{esc(account_label)}</span>
+            <span class="account-balance-pill is-danger">余额查询失败</span>
+          </span>
+        """
+
+    return f"""
+      <span class="account-balance-line">
+        <span class="account-key text-truncate">{esc(account_label)}</span>
+        <span class="account-balance-pill is-warning">余额未查询</span>
+      </span>
+    """
+
+
 def render_summary_cards(summary: dict) -> str:
     warnings = int(summary.get("warnings", 0) or 0)
     errors = int(summary.get("errors", 0) or 0)
@@ -2268,39 +2363,6 @@ def render_summary_cards(summary: dict) -> str:
       <div class="col-sm-6 col-xl"><div class="card stat-card {stopped_class}"><div class="card-body"><div class="subheader">已停止</div><div class="h1 mb-0">{esc(stopped)}</div><div class="stat-line"><span style="width:{100 if stopped else 18}%; background:#64748b"></span></div></div></div></div>
     </div>
     """
-
-
-def render_balance_overview(summary: dict) -> str:
-    balances = summary.get("account_balances") or []
-    if not balances:
-        return """
-        <div class="card mb-4">
-          <div class="card-body">
-            <div class="subheader">阿里云账户余额</div>
-            <div class="text-secondary small mt-2">暂无余额信息。点击右上角“查询账户余额”后会显示。</div>
-          </div>
-        </div>
-        """
-    cards = []
-    for item in balances:
-        ok = item.get("source") == "bss"
-        cards.append(
-            f"""
-            <div class="col-sm-6 col-xl-4">
-              <div class="card stat-card {'is-danger' if not ok else ''}">
-                <div class="card-body">
-                  <div class="subheader">阿里云账户余额</div>
-                  <div class="h1 mb-1">{esc(money_text(item.get('available_amount'), item.get('currency')) if ok else '查询失败')}</div>
-                  <div class="text-secondary small text-truncate">{esc(item.get('label') or '阿里云账号')}</div>
-                  <div class="text-secondary small mt-2">现金余额：{esc(money_text(item.get('available_cash_amount'), item.get('currency')) if ok else item.get('error') or '请检查 BSS 权限')}</div>
-                  <div class="text-secondary small">来源：{esc(item.get('source_label') or 'BSS 账单 API')} {esc(item.get('region_id') or '')}</div>
-                </div>
-              </div>
-            </div>
-            """
-        )
-    return f'<div class="row row-deck row-cards mb-4">{"".join(cards)}</div>'
-
 
 
 def progress_class(item: dict) -> str:
@@ -2504,6 +2566,7 @@ def render_server_row(item: dict, metadata: dict[str, dict], history: list[dict]
     state_class, state_label, state_sub = status_view(item.get("instance_status"))
     health_class, filter_label, priority = server_health(item)
     pct = used_percent(item)
+    account_balance = item.get("account_balance") or {}
     search_text = " ".join(
         [
             identity["product_name"],
@@ -2516,6 +2579,9 @@ def render_server_row(item: dict, metadata: dict[str, dict], history: list[dict]
             str(item.get("traffic_pool_id") or ""),
             str(item.get("traffic_scope_label") or traffic_scope_label(item.get("traffic_scope"))),
             str(item.get("instance_name") or ""),
+            str(item.get("account_fingerprint") or ""),
+            str(account_balance.get("available_amount") or ""),
+            str(account_balance.get("currency") or ""),
         ]
     ).lower()
     row_classes = ["server-row", f"is-{health_class}"]
@@ -2535,9 +2601,10 @@ def render_server_row(item: dict, metadata: dict[str, dict], history: list[dict]
           </span>
         </span>
         <span class="server-cell">
-          <span class="text-truncate">
+          <span class="server-name-stack">
             <span class="asset-name d-block text-truncate">{esc(identity['product_name'])}</span>
             <span class="asset-sub d-block text-truncate">{esc(identity['asset_label'])} · {esc(identity['provider'])}</span>
+            {render_server_account_balance(item)}
           </span>
         </span>
         <span class="server-cell"><span class="ip-main text-truncate">{esc(identity['primary_ip'])}</span></span>
@@ -2722,7 +2789,7 @@ def render_dashboard(query: dict[str, list[str]] | None = None) -> bytes:
     metadata = config_by_id(config)
     history = read_history(1000)
     flash = query.get("flash", [""])[0]
-    body = render_summary_cards(summary) + render_balance_overview(summary) + render_assets_card(instances, metadata, history)
+    body = render_summary_cards(summary) + render_assets_card(instances, metadata, history)
     return page_shell(
         "overview",
         "CDT 流量保护与服务器资产面板",
