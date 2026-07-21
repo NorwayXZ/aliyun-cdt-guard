@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,8 @@ CONFIG_FILE = BASE_DIR / "instances.json"
 STATUS_FILE = BASE_DIR / "status.json"
 HISTORY_FILE = BASE_DIR / "history.jsonl"
 LOCK_FILE = BASE_DIR / "guard.lock"
-MAX_HISTORY_LINES = 5000
+MAX_HISTORY_DAYS = int(os.environ.get("CDT_GUARD_HISTORY_DAYS", "31"))
+MAX_HISTORY_LINES = int(os.environ.get("CDT_GUARD_MAX_HISTORY_LINES", "200000"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,12 +110,40 @@ def append_history(event: dict[str, Any]) -> None:
     with HISTORY_FILE.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
 
+
+def parse_event_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def prune_history() -> None:
     try:
         lines = HISTORY_FILE.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return
-    if len(lines) > MAX_HISTORY_LINES:
-        HISTORY_FILE.write_text("\n".join(lines[-MAX_HISTORY_LINES:]) + "\n", encoding="utf-8")
+
+    cutoff = utc_now() - timedelta(days=MAX_HISTORY_DAYS)
+    kept: list[str] = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        event_time = parse_event_time(event.get("at"))
+        if event_time is None or event_time >= cutoff:
+            kept.append(line)
+
+    if len(kept) > MAX_HISTORY_LINES:
+        kept = kept[-MAX_HISTORY_LINES:]
+    if len(kept) != len(lines):
+        HISTORY_FILE.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
         os.chmod(HISTORY_FILE, 0o600)
 
 
@@ -460,6 +489,7 @@ def run_guard() -> dict[str, Any]:
     atomic_write_json(STATUS_FILE, status)
     for event in events:
         append_history(event)
+    prune_history()
     return status
 
 
@@ -535,6 +565,7 @@ def manual_power(server_id: str, power_action: str) -> dict[str, Any]:
         "error": None,
     }
     append_history(event)
+    prune_history()
     logger.info("%s %s status=%s response=%s", item["id"], action, status, api_response)
     return event
 

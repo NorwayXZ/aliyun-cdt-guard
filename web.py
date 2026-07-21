@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import subprocess
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -77,6 +78,74 @@ def read_history(limit: int = 200) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return records
+
+
+def parse_event_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def read_traffic_series(server_id: str, days: int) -> dict:
+    days = max(1, min(days, 31))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    points = []
+    previous_traffic = None
+
+    if HISTORY_FILE.exists():
+        for line in HISTORY_FILE.read_text(encoding="utf-8").splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if str(event.get("id")) != server_id:
+                continue
+            event_time = parse_event_time(event.get("at"))
+            if event_time is None or event_time < cutoff:
+                continue
+            traffic = event.get("traffic_gb")
+            if traffic is None:
+                continue
+            try:
+                traffic_gb = float(traffic)
+            except (TypeError, ValueError):
+                continue
+            delta = event.get("traffic_delta_gb")
+            try:
+                delta_gb = float(delta) if delta is not None else None
+            except (TypeError, ValueError):
+                delta_gb = None
+            if delta_gb is None and previous_traffic is not None:
+                delta_gb = traffic_gb - previous_traffic if traffic_gb >= previous_traffic else traffic_gb
+            if delta_gb is None:
+                delta_gb = 0
+            previous_traffic = traffic_gb
+            points.append(
+                {
+                    "at": event.get("at"),
+                    "traffic_gb": traffic_gb,
+                    "delta_gb": max(delta_gb, 0),
+                    "action": event.get("action"),
+                    "status": event.get("status"),
+                }
+            )
+
+    total_delta = sum(float(point.get("delta_gb") or 0) for point in points)
+    return {
+        "server_id": server_id,
+        "days": days,
+        "points": points,
+        "total_delta_gb": total_delta,
+        "first_traffic_gb": points[0]["traffic_gb"] if points else None,
+        "last_traffic_gb": points[-1]["traffic_gb"] if points else None,
+        "point_count": len(points),
+    }
 
 
 def esc(value) -> str:
@@ -705,6 +774,142 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       stroke-width: 2;
     }}
     .sparkline .area {{ fill: rgba(23, 99, 209, .08); stroke: none; }}
+    .chart-trigger {{
+      background: transparent;
+      border: 0;
+      color: var(--accent);
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 720;
+      margin-top: 6px;
+      padding: 0;
+    }}
+    .chart-trigger:hover {{ text-decoration: underline; }}
+    .traffic-modal {{
+      background: rgba(15, 23, 42, .42);
+      display: none;
+      inset: 0;
+      padding: 28px;
+      position: fixed;
+      z-index: 50;
+    }}
+    .traffic-modal.is-open {{
+      align-items: center;
+      display: flex;
+      justify-content: center;
+    }}
+    .traffic-modal-card {{
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 28px 80px rgba(15, 23, 42, .22);
+      display: grid;
+      max-height: calc(100vh - 56px);
+      max-width: 980px;
+      overflow: hidden;
+      width: min(980px, 100%);
+    }}
+    .traffic-modal-head {{
+      align-items: flex-start;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      gap: 16px;
+      justify-content: space-between;
+      padding: 18px 20px;
+    }}
+    .traffic-modal-body {{
+      display: grid;
+      gap: 16px;
+      overflow: auto;
+      padding: 18px 20px 20px;
+    }}
+    .range-tabs {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }}
+    .range-tab {{
+      background: #fff;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      color: #475569;
+      font-size: 13px;
+      font-weight: 720;
+      padding: 8px 12px;
+    }}
+    .range-tab.active {{
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }}
+    .chart-stats {{
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }}
+    .chart-stat {{
+      background: var(--surface-soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }}
+    .chart-stat-label {{
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 720;
+      margin-bottom: 4px;
+    }}
+    .chart-stat-value {{
+      color: #111827;
+      font-size: 18px;
+      font-weight: 760;
+    }}
+    .traffic-chart-wrap {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-height: 320px;
+      overflow: hidden;
+      position: relative;
+    }}
+    .traffic-chart {{
+      display: block;
+      min-height: 320px;
+      width: 100%;
+    }}
+    .chart-empty {{
+      align-items: center;
+      color: var(--muted);
+      display: none;
+      inset: 0;
+      justify-content: center;
+      padding: 24px;
+      position: absolute;
+      text-align: center;
+    }}
+    .chart-empty.show {{ display: flex; }}
+    .chart-tooltip {{
+      background: #111827;
+      border-radius: 7px;
+      color: #fff;
+      display: none;
+      font-size: 12px;
+      line-height: 1.5;
+      max-width: 220px;
+      padding: 8px 10px;
+      pointer-events: none;
+      position: absolute;
+      transform: translate(-50%, -110%);
+      z-index: 2;
+    }}
+    .traffic-table-wrap {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      max-height: 260px;
+      overflow: auto;
+    }}
+    .traffic-table {{
+      margin: 0;
+      width: 100%;
+    }}
     .btn-list form {{ display: inline-block; margin: 0; }}
     .power-panel {{
       align-items: center;
@@ -875,6 +1080,10 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       .server-state {{ min-width: 0; }}
       .traffic-compact {{ display: block; }}
       .server-detail.active {{ padding: 14px; }}
+      .traffic-modal {{ padding: 10px; }}
+      .traffic-modal-head {{ flex-direction: column; }}
+      .traffic-modal-body {{ padding: 14px; }}
+      .chart-stats {{ grid-template-columns: 1fr 1fr; }}
       .card-footer.d-flex {{
         align-items: stretch !important;
         flex-direction: column;
@@ -910,6 +1119,42 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
         <div class="container-xl">
           {flash_html}
           {body}
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="traffic-modal" data-traffic-modal aria-hidden="true">
+    <div class="traffic-modal-card" role="dialog" aria-modal="true" aria-labelledby="traffic-modal-title">
+      <div class="traffic-modal-head">
+        <div>
+          <h3 class="card-title mb-1" id="traffic-modal-title">流量曲线</h3>
+          <div class="text-secondary small" data-chart-server>选择服务器查看历史流量</div>
+        </div>
+        <button class="btn btn-sm" type="button" data-chart-close>关闭</button>
+      </div>
+      <div class="traffic-modal-body">
+        <div class="range-tabs" data-chart-ranges>
+          <button class="range-tab active" type="button" data-days="1">1 天</button>
+          <button class="range-tab" type="button" data-days="3">3 天</button>
+          <button class="range-tab" type="button" data-days="7">7 天</button>
+          <button class="range-tab" type="button" data-days="30">1 个月</button>
+        </div>
+        <div class="chart-stats">
+          <div class="chart-stat"><div class="chart-stat-label">期间新增</div><div class="chart-stat-value" data-chart-total>--</div></div>
+          <div class="chart-stat"><div class="chart-stat-label">当前累计</div><div class="chart-stat-value" data-chart-last>--</div></div>
+          <div class="chart-stat"><div class="chart-stat-label">检查点</div><div class="chart-stat-value" data-chart-count>--</div></div>
+          <div class="chart-stat"><div class="chart-stat-label">时间范围</div><div class="chart-stat-value" data-chart-range>--</div></div>
+        </div>
+        <div class="traffic-chart-wrap">
+          <svg class="traffic-chart" viewBox="0 0 760 320" data-chart-svg aria-label="流量曲线"></svg>
+          <div class="chart-tooltip" data-chart-tooltip></div>
+          <div class="chart-empty" data-chart-empty>暂无历史数据。手动检查或等待定时巡检后会开始记录。</div>
+        </div>
+        <div class="traffic-table-wrap">
+          <table class="table traffic-table">
+            <thead><tr><th>时间</th><th>累计流量</th><th>本次新增</th><th>状态</th></tr></thead>
+            <tbody data-chart-table><tr><td colspan="4" class="text-secondary">暂无数据</td></tr></tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -1027,9 +1272,195 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
         }});
       }});
     }}
+    const trafficChart = {{
+      serverId: "",
+      serverName: "",
+      days: 1,
+      points: []
+    }};
+    function gbText(value) {{
+      const number = Number(value || 0);
+      return number.toFixed(2) + " GB";
+    }}
+    function timeText(value) {{
+      if (!value) return "暂无";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString("zh-CN", {{ hour12: false }});
+    }}
+    function setModalOpen(open) {{
+      const modal = document.querySelector("[data-traffic-modal]");
+      if (!modal) return;
+      modal.classList.toggle("is-open", open);
+      modal.setAttribute("aria-hidden", open ? "false" : "true");
+      document.body.style.overflow = open ? "hidden" : "";
+    }}
+    async function loadTrafficChart() {{
+      const svg = document.querySelector("[data-chart-svg]");
+      const empty = document.querySelector("[data-chart-empty]");
+      const table = document.querySelector("[data-chart-table]");
+      if (svg) svg.innerHTML = "";
+      if (empty) {{
+        empty.textContent = "正在加载流量历史...";
+        empty.classList.add("show");
+      }}
+      if (table) table.innerHTML = '<tr><td colspan="4" class="text-secondary">正在加载...</td></tr>';
+      const data = await requestJson(`/api/traffic?server=${{trafficChart.serverId}}&days=${{trafficChart.days}}`);
+      trafficChart.points = data.points || [];
+      renderTrafficChart(data);
+    }}
+    function requestJson(url) {{
+      return new Promise((resolve, reject) => {{
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", url, true);
+        xhr.setRequestHeader("Cache-Control", "no-store");
+        xhr.onreadystatechange = () => {{
+          if (xhr.readyState !== 4) return;
+          if (xhr.status < 200 || xhr.status >= 300) {{
+            reject(new Error("HTTP " + xhr.status));
+            return;
+          }}
+          try {{
+            resolve(JSON.parse(xhr.responseText));
+          }} catch (error) {{
+            reject(error);
+          }}
+        }};
+        xhr.onerror = () => reject(new Error("Network error"));
+        xhr.send();
+      }});
+    }}
+    function renderTrafficChart(data) {{
+      const points = data.points || [];
+      const svg = document.querySelector("[data-chart-svg]");
+      const empty = document.querySelector("[data-chart-empty]");
+      const table = document.querySelector("[data-chart-table]");
+      const total = document.querySelector("[data-chart-total]");
+      const last = document.querySelector("[data-chart-last]");
+      const count = document.querySelector("[data-chart-count]");
+      const range = document.querySelector("[data-chart-range]");
+      if (total) total.textContent = gbText(data.total_delta_gb);
+      if (last) last.textContent = data.last_traffic_gb == null ? "--" : gbText(data.last_traffic_gb);
+      if (count) count.textContent = String(data.point_count || 0);
+      if (range) range.textContent = data.days === 30 ? "1 个月" : data.days + " 天";
+      if (!svg) return;
+      svg.innerHTML = "";
+      if (!points.length) {{
+        if (empty) {{
+          empty.textContent = "这个时间范围内暂无历史记录。";
+          empty.classList.add("show");
+        }}
+        if (table) table.innerHTML = '<tr><td colspan="4" class="text-secondary">暂无数据</td></tr>';
+        return;
+      }}
+      if (empty) empty.classList.remove("show");
+
+      const width = 760;
+      const height = 320;
+      const pad = {{ left: 54, right: 24, top: 24, bottom: 42 }};
+      const values = points.map((point) => Number(point.traffic_gb || 0));
+      const deltas = points.map((point) => Number(point.delta_gb || 0));
+      const minValue = Math.min(...values);
+      const maxValue = Math.max(...values);
+      const maxDelta = Math.max(...deltas, 0.001);
+      const span = maxValue - minValue || 1;
+      const plotW = width - pad.left - pad.right;
+      const plotH = height - pad.top - pad.bottom;
+      const xAt = (index) => pad.left + (points.length === 1 ? plotW : index * plotW / (points.length - 1));
+      const yAt = (value) => pad.top + plotH - ((value - minValue) / span * plotH);
+      const barY = pad.top + plotH;
+      const barW = Math.max(1, plotW / Math.max(points.length, 1) * .72);
+      const ns = "http://www.w3.org/2000/svg";
+      const add = (name, attrs) => {{
+        const node = document.createElementNS(ns, name);
+        Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, value));
+        svg.appendChild(node);
+        return node;
+      }};
+
+      for (let i = 0; i <= 4; i += 1) {{
+        const y = pad.top + i * plotH / 4;
+        add("line", {{ x1: pad.left, y1: y, x2: width - pad.right, y2: y, stroke: "#e5e7eb", "stroke-width": "1" }});
+      }}
+      points.forEach((point, index) => {{
+        const delta = Number(point.delta_gb || 0);
+        if (delta <= 0) return;
+        const h = Math.max(2, delta / maxDelta * 58);
+        add("rect", {{ x: xAt(index) - barW / 2, y: barY - h, width: barW, height: h, rx: "2", fill: "rgba(245, 159, 0, .36)" }});
+      }});
+      const line = values.map((value, index) => `${{xAt(index).toFixed(1)}},${{yAt(value).toFixed(1)}}`).join(" ");
+      add("polyline", {{ points: line, fill: "none", stroke: "#1763d1", "stroke-width": "3", "stroke-linecap": "round", "stroke-linejoin": "round" }});
+      add("text", {{ x: pad.left, y: height - 12, fill: "#64748b", "font-size": "12" }}).textContent = timeText(points[0].at);
+      add("text", {{ x: width - pad.right, y: height - 12, fill: "#64748b", "font-size": "12", "text-anchor": "end" }}).textContent = timeText(points[points.length - 1].at);
+      add("text", {{ x: 10, y: pad.top + 4, fill: "#64748b", "font-size": "12" }}).textContent = gbText(maxValue);
+      add("text", {{ x: 10, y: pad.top + plotH, fill: "#64748b", "font-size": "12" }}).textContent = gbText(minValue);
+
+      const tooltip = document.querySelector("[data-chart-tooltip]");
+      const markerStep = Math.max(1, Math.ceil(points.length / 180));
+      points.forEach((point, index) => {{
+        if (index % markerStep !== 0 && index !== points.length - 1) return;
+        const cx = xAt(index);
+        const cy = yAt(Number(point.traffic_gb || 0));
+        const circle = add("circle", {{ cx, cy, r: "7", fill: "transparent", stroke: "transparent" }});
+        circle.addEventListener("pointermove", () => {{
+          if (!tooltip) return;
+          tooltip.innerHTML = `${{timeText(point.at)}}<br>累计：${{gbText(point.traffic_gb)}}<br>新增：${{gbText(point.delta_gb)}}`;
+          tooltip.style.display = "block";
+          tooltip.style.left = (cx / width * 100) + "%";
+          tooltip.style.top = (cy / height * 100) + "%";
+        }});
+        circle.addEventListener("pointerleave", () => {{
+          if (tooltip) tooltip.style.display = "none";
+        }});
+      }});
+
+      if (table) {{
+        const rows = points.slice(-160).reverse().map((point) => `
+          <tr>
+            <td>${{timeText(point.at)}}</td>
+            <td>${{gbText(point.traffic_gb)}}</td>
+            <td>${{gbText(point.delta_gb)}}</td>
+            <td>${{point.status || ""}}</td>
+          </tr>
+        `);
+        table.innerHTML = rows.join("");
+      }}
+    }}
+    function initTrafficChartModal() {{
+      const modal = document.querySelector("[data-traffic-modal]");
+      if (!modal) return;
+      document.querySelectorAll("[data-chart-trigger]").forEach((button) => {{
+        button.addEventListener("click", (event) => {{
+          event.preventDefault();
+          event.stopPropagation();
+          trafficChart.serverId = button.dataset.serverId || "";
+          trafficChart.serverName = button.dataset.serverName || trafficChart.serverId;
+          trafficChart.days = 1;
+          document.querySelector("[data-chart-server]").textContent = trafficChart.serverName;
+          document.querySelectorAll("[data-days]").forEach((tab) => tab.classList.toggle("active", tab.dataset.days === "1"));
+          setModalOpen(true);
+          loadTrafficChart().catch(() => renderTrafficChart({{ points: [], point_count: 0, days: trafficChart.days, total_delta_gb: 0 }}));
+        }});
+      }});
+      document.querySelector("[data-chart-close]")?.addEventListener("click", () => setModalOpen(false));
+      modal.addEventListener("click", (event) => {{
+        if (event.target === modal) setModalOpen(false);
+      }});
+      document.querySelectorAll("[data-days]").forEach((tab) => {{
+        tab.addEventListener("click", () => {{
+          trafficChart.days = Number(tab.dataset.days || 1);
+          document.querySelectorAll("[data-days]").forEach((item) => item.classList.toggle("active", item === tab));
+          loadTrafficChart().catch(() => renderTrafficChart({{ points: [], point_count: 0, days: trafficChart.days, total_delta_gb: 0 }}));
+        }});
+      }});
+      document.addEventListener("keydown", (event) => {{
+        if (event.key === "Escape") setModalOpen(false);
+      }});
+    }}
     document.addEventListener("DOMContentLoaded", initAssetBoard);
     document.addEventListener("DOMContentLoaded", initSaveForms);
     document.addEventListener("DOMContentLoaded", initRunCheckForms);
+    document.addEventListener("DOMContentLoaded", initTrafficChartModal);
   </script>
 </body>
 </html>
@@ -1267,6 +1698,7 @@ def render_server_row(item: dict, metadata: dict[str, dict], history: list[dict]
             <span class="progress"><span class="progress-bar {progress_class(item)}" style="width:{pct:.2f}%"></span></span>
             <span class="asset-sub d-block mt-1">{esc(fmt_delta(item.get('traffic_delta_gb')))}</span>
             {sparkline_svg(traffic_values(identity['id'], history, item.get('traffic_gb')))}
+            <button class="chart-trigger" type="button" data-chart-trigger data-server-id="{esc(identity['id'])}" data-server-name="{esc(identity['product_name'])}">查看曲线</button>
           </span>
         </span>
         <span class="server-cell">
@@ -1325,6 +1757,7 @@ def render_server_detail(item: dict, metadata: dict[str, dict], active: bool = F
             <span>{pct:.0f}% 已用</span>
           </div>
           <div class="mt-2">{traffic_delta_badge(item.get('traffic_delta_gb'))}</div>
+          <button class="chart-trigger" type="button" data-chart-trigger data-server-id="{esc(identity['id'])}" data-server-name="{esc(identity['product_name'])}">查看 1天/3天/7天/1个月曲线</button>
         </div>
         <div class="detail-section">
           <div class="info-label">CDT 计费明细</div>
@@ -1809,6 +2242,11 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/history":
             limit = int(query.get("limit", ["200"])[0])
             self.send_json(read_history(max(1, min(limit, 1000))))
+            return
+        if parsed.path == "/api/traffic":
+            server_id = query.get("server", [""])[0]
+            days = int(query.get("days", ["1"])[0])
+            self.send_json(read_traffic_series(server_id, days))
             return
         if parsed.path == "/healthz":
             self.send_json({"ok": True})
