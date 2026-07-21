@@ -236,6 +236,29 @@ Telegram 配置流程：
 
 注意：`@your_bot_name` 通常是机器人用户名，不是你的个人 Chat ID。私聊通知一般需要纯数字 Chat ID。
 
+Telegram 主动查询命令：
+
+配置完成后，可以在 Telegram 里直接给机器人发送命令，主动获取面板里的流量和服务器状态。主动查询只做查看，不支持远程开关机。
+
+```text
+/status        查看面板总览、机器数量、预警和错误
+/traffic       查看每台机器当前 CDT 用量、本次新增和重置时间
+/pools         查看共享 CDT 流量池用量和成员机器
+/server 关键词  按产品名、实例 ID 或公网 IP 查询单台服务器
+/report        立即生成一次完整流量报告
+/help          查看命令帮助
+```
+
+示例：
+
+```text
+/server hk
+/server 154.83.98.194
+/traffic
+```
+
+命令回复依赖巡检任务轮询 Telegram `getUpdates`，默认大约每分钟处理一次。如果 Bot 设置了 Telegram Webhook，`getUpdates` 可能会被 Telegram 拒绝，需要先删除 Webhook 后再使用主动查询。
+
 通知配置文件：
 
 ```text

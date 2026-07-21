@@ -164,12 +164,14 @@ def telegram_status(config: dict[str, Any] | None = None) -> dict[str, Any]:
     channel = config.get("telegram", {})
     token = str(channel.get("bot_token") or "")
     chat_id = str(channel.get("chat_id") or "")
+    channel_ready = bool(channel.get("enabled") and token and chat_id)
     return {
         "enabled": bool(channel.get("enabled")),
         "token_configured": bool(token),
         "token_masked": mask_secret(token),
         "chat_id": chat_id,
-        "ready": bool(config.get("enabled") and channel.get("enabled") and token and chat_id),
+        "ready": bool(config.get("enabled") and channel_ready),
+        "command_ready": bool(channel_ready and not chat_id.startswith("@")),
     }
 
 
@@ -232,6 +234,31 @@ def send_telegram(channel: dict[str, Any], title: str, message: str) -> dict[str
             "disable_web_page_preview": bool(channel.get("disable_web_page_preview", True)),
         },
     )
+
+
+def send_telegram_to_chat(token: str, chat_id: str, text: str) -> dict[str, Any]:
+    if not token or not chat_id:
+        return {"ok": False, "error": "Telegram Bot Token 或 Chat ID 未填写"}
+    return post_json(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": True,
+        },
+    )
+
+
+def telegram_get_updates(token: str, offset: int | None = None) -> dict[str, Any]:
+    if not token:
+        return {"ok": False, "error": "Telegram Bot Token 未填写"}
+    url = f"https://api.telegram.org/bot{token}/getUpdates?timeout=1&limit=20"
+    if offset is not None:
+        url += f"&offset={offset}"
+    result = get_json(url, timeout=8)
+    if not result.get("ok"):
+        return {"ok": False, "error": result.get("description") or result.get("error") or "Telegram getUpdates 失败", "raw": result}
+    return result
 
 
 def send_webhook(channel: dict[str, Any], title: str, message: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -301,6 +328,7 @@ def action_label(action: str | None) -> str:
         "start": "自动启动",
         "manual_stop": "手动关机",
         "manual_start": "手动开机",
+        "keep_running": "保持运行",
         "keep_stopped": "保持停止",
         "error": "检查错误",
     }
@@ -335,6 +363,198 @@ def build_daily_report(status: dict[str, Any]) -> tuple[str, str]:
     return title, "\n".join(lines).strip()
 
 
+def pool_summary(status: dict[str, Any]) -> list[dict[str, Any]]:
+    pools: dict[str, dict[str, Any]] = {}
+    for item in status.get("instances", []):
+        key = str(item.get("traffic_pool_key") or item.get("id"))
+        pool = pools.setdefault(
+            key,
+            {
+                "label": item.get("traffic_pool_label") or item.get("traffic_region_id") or "未知流量池",
+                "traffic_gb": item.get("traffic_gb"),
+                "stop_threshold_gb": item.get("stop_threshold_gb"),
+                "members": [],
+                "warning": False,
+            },
+        )
+        pool["members"].append(item.get("label") or item.get("id"))
+        pool["warning"] = bool(pool.get("warning") or item.get("warning"))
+    return list(pools.values())
+
+
+def telegram_help_text() -> str:
+    return (
+        "Aliyun CDT Guard 可用命令\n\n"
+        "/status - 查看面板总览\n"
+        "/traffic - 查看每台机器 CDT 用量\n"
+        "/pools - 查看流量池用量\n"
+        "/report - 立即生成一次流量报告\n"
+        "/server 关键词 - 查看某台服务器详情\n"
+        "/help - 查看帮助\n\n"
+        "说明：Telegram 命令只用于查询，不提供远程开关机。"
+    )
+
+
+def build_status_reply(status: dict[str, Any]) -> str:
+    summary = status.get("summary", {})
+    return (
+        "Aliyun CDT Guard 总览\n\n"
+        f"更新时间：{status.get('generated_at') or '暂无'}\n"
+        f"机器：{summary.get('enabled', 0)}/{summary.get('total', 0)} 启用\n"
+        f"流量池：{summary.get('pools', 0)}\n"
+        f"预警：{summary.get('warnings', 0)}\n"
+        f"错误：{summary.get('errors', 0)}\n"
+        f"已停止：{summary.get('stopped', 0)}\n"
+        f"本次启停动作：{summary.get('actions', 0)}"
+    )
+
+
+def build_traffic_reply(status: dict[str, Any]) -> str:
+    lines = ["每台机器流量", ""]
+    for item in status.get("instances", []):
+        plan = item.get("recovery_plan") or {}
+        lines.append(
+            f"- {item.get('label') or item.get('id')}\n"
+            f"  状态：{item.get('instance_status') or '未知'}\n"
+            f"  CDT：{gb(item.get('traffic_gb'))} / {gb(item.get('stop_threshold_gb'))}\n"
+            f"  本次新增：{gb(item.get('traffic_delta_gb'))}\n"
+            f"  流量池：{item.get('traffic_pool_label') or '未知'}\n"
+            f"  下次重置：{str(plan.get('next_reset_at') or '暂无').split('T')[0]}，约 {plan.get('days_until_reset', '未知')} 天"
+        )
+    return "\n".join(lines).strip()
+
+
+def build_pools_reply(status: dict[str, Any]) -> str:
+    lines = ["流量池用量", ""]
+    for pool in pool_summary(status):
+        try:
+            used_pct = float(pool.get("traffic_gb") or 0) / float(pool.get("stop_threshold_gb") or 1) * 100
+        except (TypeError, ValueError, ZeroDivisionError):
+            used_pct = 0
+        lines.append(
+            f"- {pool.get('label')}\n"
+            f"  用量：{gb(pool.get('traffic_gb'))} / {gb(pool.get('stop_threshold_gb'))} ({used_pct:.0f}%)\n"
+            f"  机器：{', '.join(str(name) for name in pool.get('members', []))}"
+        )
+    return "\n".join(lines).strip()
+
+
+def build_server_reply(status: dict[str, Any], keyword: str) -> str:
+    keyword = keyword.strip().lower()
+    if not keyword:
+        return "请带上服务器关键词，例如：/server hk 或 /server norwayx"
+    for item in status.get("instances", []):
+        haystack = " ".join(
+            str(value or "")
+            for value in [
+                item.get("id"),
+                item.get("label"),
+                item.get("instance_id"),
+                item.get("instance_name"),
+                ",".join(item.get("public_ips") or []),
+            ]
+        ).lower()
+        if keyword not in haystack:
+            continue
+        plan = item.get("recovery_plan") or {}
+        return (
+            f"{item.get('label') or item.get('id')}\n\n"
+            f"状态：{item.get('instance_status') or '未知'}\n"
+            f"实例：{item.get('instance_id')}\n"
+            f"公网 IP：{', '.join(item.get('public_ips') or []) or '未知'}\n"
+            f"区域：{item.get('region_id')}\n"
+            f"CDT：{gb(item.get('traffic_gb'))} / {gb(item.get('stop_threshold_gb'))}\n"
+            f"剩余：{gb(item.get('remaining_gb'))}\n"
+            f"动作：{action_label(item.get('action'))}\n"
+            f"原因：{item.get('reason') or '无'}\n"
+            f"流量池：{item.get('traffic_pool_label') or '未知'}\n"
+            f"预计重置：{str(plan.get('next_reset_at') or '暂无').split('T')[0]}，约 {plan.get('days_until_reset', '未知')} 天"
+        )
+    return f"没有找到匹配服务器：{keyword}"
+
+
+def build_command_reply(text: str, status: dict[str, Any]) -> str:
+    command, _, rest = text.strip().partition(" ")
+    command = command.split("@", 1)[0].lower()
+    if command in {"/help", "/start"}:
+        return telegram_help_text()
+    if command == "/status":
+        return build_status_reply(status)
+    if command == "/traffic":
+        return build_traffic_reply(status)
+    if command == "/pools":
+        return build_pools_reply(status)
+    if command == "/report":
+        title, message = build_daily_report(status)
+        return f"{title}\n\n{message}"
+    if command == "/server":
+        return build_server_reply(status, rest)
+    return "未知命令。发送 /help 查看可用命令。"
+
+
+def extract_message(update: dict[str, Any]) -> dict[str, Any]:
+    return update.get("message") or update.get("edited_message") or {}
+
+
+def telegram_commands_enabled(config: dict[str, Any]) -> bool:
+    channel = config.get("telegram", {})
+    return bool(channel.get("enabled") and channel.get("bot_token") and channel.get("chat_id"))
+
+
+def handle_telegram_commands(status: dict[str, Any], config: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+    if not telegram_commands_enabled(config):
+        return []
+    channel = config.get("telegram", {})
+    token = str(channel.get("bot_token") or "").strip()
+    allowed_chat_id = str(channel.get("chat_id") or "").strip()
+    if allowed_chat_id.startswith("@"):
+        state["telegram_command_error"] = "Chat ID 是用户名格式，Telegram 命令需要数字 Chat ID。"
+        return []
+
+    offset = state.get("telegram_update_offset")
+    try:
+        offset = int(offset) if offset is not None else None
+    except (TypeError, ValueError):
+        offset = None
+    state["telegram_last_command_poll_at"] = datetime.now(ZoneInfo("UTC")).isoformat()
+    result = telegram_get_updates(token, offset)
+    if not result.get("ok"):
+        state["telegram_command_error"] = result.get("error") or "Telegram 命令轮询失败"
+        return []
+
+    handled: list[dict[str, Any]] = []
+    max_update_id = offset - 1 if offset is not None else None
+    for update in result.get("result") or []:
+        update_id = update.get("update_id")
+        if isinstance(update_id, int):
+            max_update_id = update_id if max_update_id is None else max(max_update_id, update_id)
+        message = extract_message(update)
+        text = str(message.get("text") or "").strip()
+        chat_id = str((message.get("chat") or {}).get("id") or "")
+        if not text.startswith("/"):
+            continue
+        if chat_id != allowed_chat_id:
+            if chat_id:
+                send_telegram_to_chat(token, chat_id, "这个机器人已绑定到其他 Chat ID，当前会话无权查询面板状态。")
+            handled.append({"chat_id": chat_id, "command": text, "allowed": False})
+            continue
+        reply = build_command_reply(text, status)
+        send_result = send_telegram_to_chat(token, chat_id, reply)
+        handled.append({"chat_id": chat_id, "command": text, "allowed": True, "result": send_result})
+
+    if max_update_id is not None:
+        state["telegram_update_offset"] = max_update_id + 1
+    if handled:
+        state["telegram_last_command"] = {
+            "at": datetime.now(ZoneInfo("UTC")).isoformat(),
+            "command": handled[-1].get("command"),
+            "allowed": handled[-1].get("allowed"),
+            "ok": bool((handled[-1].get("result") or {}).get("ok")) if handled[-1].get("allowed") else False,
+        }
+    state.pop("telegram_command_error", None)
+    return handled
+
+
 def should_send_daily_report(config: dict[str, Any], state: dict[str, Any], now: datetime | None = None) -> bool:
     rules = config.get("rules", {})
     if not config.get("enabled") or not rules.get("daily_report"):
@@ -362,15 +582,29 @@ def handle_guard_notifications(
     previous_status: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     config = load_config()
+    state = load_state()
+    state_before = json.dumps(state, ensure_ascii=False, sort_keys=True)
+    sent: list[dict[str, Any]] = []
+
+    for command in handle_telegram_commands(status, config, state):
+        sent.append(
+            {
+                "id": "telegram_command",
+                "title": f"Telegram 命令 {command.get('command')}",
+                "result": command.get("result") or {"ok": False, "allowed": command.get("allowed")},
+            }
+        )
+
     if not config.get("enabled"):
-        return []
+        if json.dumps(state, ensure_ascii=False, sort_keys=True) != state_before:
+            save_state(state)
+        return sent
 
     rules = config.get("rules", {})
     previous_by_id = {
         str(item.get("id")): item
         for item in (previous_status or {}).get("instances", [])
     }
-    sent: list[dict[str, Any]] = []
     for item in status.get("instances", []):
         previous = previous_by_id.get(str(item.get("id")), {})
         title = ""
@@ -386,12 +620,12 @@ def handle_guard_notifications(
         result = send_message(title, instance_line(item), {"instance": item, "status": status}, config)
         sent.append({"id": item.get("id"), "title": title, "result": result})
 
-    state = load_state()
     if should_send_daily_report(config, state):
         title, message = build_daily_report(status)
         result = send_message(title, message, {"status": status}, config)
         sent.append({"id": "daily_report", "title": title, "result": result})
         state["last_daily_report_date"] = datetime.now(ZoneInfo(config.get("rules", {}).get("timezone") or "Asia/Shanghai")).date().isoformat()
+    if json.dumps(state, ensure_ascii=False, sort_keys=True) != state_before:
         save_state(state)
     return sent
 

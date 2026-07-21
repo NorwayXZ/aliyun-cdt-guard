@@ -1468,7 +1468,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       border-radius: 8px;
       display: grid;
       gap: 12px;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
       margin-bottom: 16px;
       padding: 14px;
     }}
@@ -1521,6 +1521,30 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       margin-top: 4px;
       padding: 3px 6px;
     }}
+    .telegram-command-grid {{
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-top: 10px;
+    }}
+    .telegram-command {{
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }}
+    .telegram-command code {{
+      color: #111827;
+      font-size: 12px;
+      font-weight: 720;
+    }}
+    .telegram-command span {{
+      color: var(--muted);
+      display: block;
+      font-size: 12px;
+      line-height: 1.45;
+      margin-top: 4px;
+    }}
     .log-layout {{ display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; }}
     .log-item summary {{ cursor: pointer; list-style: none; }}
     .log-item summary::-webkit-details-marker {{ display: none; }}
@@ -1540,6 +1564,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       .credential-grid, .log-layout, .log-meta, .asset-filter-bar, .detail-grid {{ grid-template-columns: 1fr; }}
       .channel-status {{ grid-template-columns: 1fr; }}
       .chat-candidate {{ grid-template-columns: 1fr; }}
+      .telegram-command-grid {{ grid-template-columns: 1fr; }}
       .power-panel {{ align-items: flex-start; flex-direction: column; }}
       .table-responsive {{ min-height: 0; }}
     }}
@@ -2576,6 +2601,8 @@ def yes_no(value: bool) -> str:
 def render_telegram_status(config: dict, state: dict) -> str:
     status = notifications.telegram_status(config)
     last_error = state.get("telegram_last_error", "")
+    command_error = state.get("telegram_command_error", "")
+    last_command = state.get("telegram_last_command") or {}
     last_test = state.get("last_test_result") or {}
     chat_id = str(status.get("chat_id") or "")
     chat_warning = ""
@@ -2584,6 +2611,25 @@ def render_telegram_status(config: dict, state: dict) -> str:
     test_text = "暂无测试"
     if last_test:
         test_text = "成功" if last_test.get("ok") else f"失败：{last_test.get('error') or '请查看渠道配置'}"
+    command_text = "暂无命令"
+    if last_command:
+        command_text = f"{last_command.get('command') or '未知命令'}，{'已回复' if last_command.get('ok') else '未回复'}"
+    command_cards = "".join(
+        f"""
+        <div class="telegram-command">
+          <code>{esc(command)}</code>
+          <span>{esc(description)}</span>
+        </div>
+        """
+        for command, description in [
+            ("/status", "查看面板总览、机器数量、预警和错误。"),
+            ("/traffic", "查看每台机器当前 CDT 用量、本次新增和重置时间。"),
+            ("/pools", "查看共享 CDT 流量池用量和成员机器。"),
+            ("/server 关键词", "按产品名、实例 ID 或公网 IP 查询单台服务器。"),
+            ("/report", "立即生成一次完整流量报告。"),
+            ("/help", "查看 Telegram 命令帮助。"),
+        ]
+    )
     return f"""
       <div class="channel-status">
         <div class="channel-status-item">
@@ -2595,6 +2641,10 @@ def render_telegram_status(config: dict, state: dict) -> str:
           <div class="channel-status-value">{esc('可发送' if status.get('ready') else '未就绪')}</div>
         </div>
         <div class="channel-status-item">
+          <div class="channel-status-label">主动查询</div>
+          <div class="channel-status-value">{esc('可用' if status.get('command_ready') else '未就绪')}</div>
+        </div>
+        <div class="channel-status-item">
           <div class="channel-status-label">Bot Token</div>
           <div class="channel-status-value">{esc('已保存 ' + status.get('token_masked') if status.get('token_configured') else '未保存')}</div>
         </div>
@@ -2604,8 +2654,14 @@ def render_telegram_status(config: dict, state: dict) -> str:
         </div>
       </div>
       {f'<div class="alert alert-danger mb-3">{esc(last_error)}</div>' if last_error else ''}
+      {f'<div class="alert alert-danger mb-3">{esc(command_error)}</div>' if command_error else ''}
       {f'<div class="alert alert-warning mb-3">{esc(chat_warning)}</div>' if chat_warning else ''}
       <div class="text-secondary small mb-3">上次测试：{esc(test_text)}</div>
+      <div class="text-secondary small mb-3">最近 Telegram 命令：{esc(command_text)}</div>
+      <div class="setup-box">
+        <strong>主动查询：</strong>保存 Telegram 配置后，在 Telegram 里直接发送下面任意命令即可获取面板数据。主动查询只做状态查看，不提供远程开关机。
+        <div class="telegram-command-grid">{command_cards}</div>
+      </div>
     """
 
 
