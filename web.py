@@ -689,29 +689,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       gap: 8px;
       justify-content: space-between;
     }}
-    .overflow-menu {{
-      position: relative;
-    }}
-    .overflow-menu summary {{
-      list-style: none;
-    }}
-    .overflow-menu summary::-webkit-details-marker {{ display: none; }}
-    .overflow-menu[open] .overflow-popover {{
-      display: block;
-    }}
-    .overflow-popover {{
-      background: #fff;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: 0 18px 50px rgba(15, 23, 42, .12);
-      display: none;
-      min-width: 148px;
-      padding: 8px;
-      position: absolute;
-      right: 0;
-      top: calc(100% + 6px);
-      z-index: 10;
-    }}
+    .delete-form {{ margin: 0; }}
     .empty-state {{
       color: var(--muted);
       padding: 32px 18px;
@@ -857,12 +835,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       .submit-feedback {{ margin-right: 0; }}
       .btn-submit.ms-auto {{ margin-left: 0 !important; }}
       .detail-actions {{ align-items: stretch; flex-direction: column; }}
-      .detail-actions .btn, .detail-actions .overflow-menu {{ width: 100%; }}
-      .overflow-popover {{
-        position: static;
-        margin-top: 8px;
-        width: 100%;
-      }}
+      .detail-actions .btn, .detail-actions .delete-form {{ width: 100%; }}
     }}
   </style>
 </head>
@@ -1294,15 +1267,10 @@ def render_server_detail(item: dict, metadata: dict[str, dict], active: bool = F
         </details>
         <div class="detail-section detail-actions">
           <a class="btn btn-primary btn-sm" href="/servers/edit?id={esc(identity['id'])}">编辑这台服务器</a>
-          <details class="overflow-menu">
-            <summary class="btn btn-sm">更多</summary>
-            <div class="overflow-popover">
-              <form method="post" action="/servers/delete" onsubmit="return confirm('确认删除这台服务器？')">
-                <input type="hidden" name="id" value="{esc(identity['id'])}">
-                <button class="btn btn-sm btn-outline-danger w-100" type="submit">删除服务器</button>
-              </form>
-            </div>
-          </details>
+          <form class="delete-form" method="post" action="/servers/delete" onsubmit="return confirm('确认删除这台服务器？删除后会立即从面板移除，并执行一次检查。')">
+            <input type="hidden" name="id" value="{esc(identity['id'])}">
+            <button class="btn btn-sm btn-outline-danger" type="submit">删除服务器</button>
+          </form>
         </div>
       </section>
     """
