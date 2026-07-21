@@ -12,6 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import notifications
+
 BASE_DIR = Path(os.environ.get("CDT_GUARD_HOME", "/opt/aliyun-cdt-guard"))
 WEB_ENV_FILE = BASE_DIR / "web.env"
 CONFIG_FILE = BASE_DIR / "instances.json"
@@ -366,6 +368,9 @@ def flash_message(code: str) -> str:
         "started": "已提交开机指令，并恢复自动保护",
         "stopped": "已提交关机指令，自动启动已暂停",
         "power_failed": "电源操作失败，请查看服务器日志",
+        "notify_saved": "通知设置已保存",
+        "notify_test_sent": "已发送测试通知，请检查接收端",
+        "notify_test_failed": "测试通知发送失败，请检查配置",
     }
     return messages.get(code, code)
 
@@ -375,6 +380,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
         ("/", "overview", "总览"),
         ("/servers/new", "servers", "新增/编辑"),
         ("/logs", "logs", "服务器日志"),
+        ("/notifications", "notifications", "通知设置"),
     ]
     nav_html = "".join(
         f'<li class="nav-item {"active" if key == active else ""}"><a class="nav-link" href="{href}"><span class="nav-link-title">{label}</span></a></li>'
@@ -2082,6 +2088,142 @@ def render_logs_page(query: dict[str, list[str]] | None = None) -> bytes:
     )
 
 
+def render_notifications_page(query: dict[str, list[str]] | None = None) -> bytes:
+    query = query or {}
+    config = notifications.load_config()
+    rules = config.get("rules", {})
+    telegram = config.get("telegram", {})
+    webhook = config.get("webhook", {})
+    smtp = config.get("smtp", {})
+    flash = query.get("flash", [""])[0]
+    body = f"""
+    <form class="card save-form" method="post" action="/notifications/save" data-save-form>
+      <div class="card-header">
+        <div class="asset-toolbar w-100">
+          <h3 class="card-title">通知设置</h3>
+          <button class="btn btn-primary btn-sm" type="submit" data-submit-button data-loading-text="正在保存...">保存通知设置</button>
+        </div>
+      </div>
+      <div class="card-body notification-layout">
+        <section class="form-section">
+          <h3 class="form-section-title">通知总开关</h3>
+          {checkbox_field("enabled", "启用通知系统", bool(config.get("enabled")), "关闭后不会发送 Telegram、Webhook 或邮件。")}
+          <div class="credential-grid">
+            {checkbox_field("notify_actions", "启停动作通知", bool(rules.get("notify_actions", True)), "自动停机、自动启动时发送。")}
+            {checkbox_field("notify_warnings", "流量预警通知", bool(rules.get("notify_warnings", True)), "首次进入预警状态时发送，避免每分钟刷屏。")}
+          </div>
+          <div class="credential-grid">
+            {checkbox_field("notify_errors", "检查错误通知", bool(rules.get("notify_errors", True)), "阿里云 API 失败、实例查询失败等错误变化时发送。")}
+            {checkbox_field("daily_report", "每日报告", bool(rules.get("daily_report", False)), "每天按指定时间发送一次服务器和流量池汇总。")}
+          </div>
+          <div class="credential-grid">
+            {input_field("daily_report_time", "每日报告时间", rules.get("daily_report_time", "09:00"), placeholder="09:00", hint="按下面的时区判断，格式 HH:MM。")}
+            {input_field("timezone", "报告时区", rules.get("timezone", "Asia/Shanghai"), placeholder="Asia/Shanghai")}
+          </div>
+        </section>
+
+        <section class="form-section">
+          <h3 class="form-section-title">Telegram</h3>
+          {checkbox_field("telegram_enabled", "启用 Telegram Bot 通知", bool(telegram.get("enabled")), "从 BotFather 创建机器人，填 Bot Token；Chat ID 可以是个人、群组或频道。")}
+          <div class="credential-grid">
+            {input_field("telegram_bot_token", "Bot Token", "", "password", placeholder="123456:ABC-DEF...", hint="留空则保留原 Token。")}
+            {input_field("telegram_chat_id", "Chat ID", telegram.get("chat_id", ""), placeholder="例如：123456789 或 -100xxxxxxxxxx")}
+          </div>
+          {checkbox_field("telegram_disable_preview", "禁用链接预览", bool(telegram.get("disable_web_page_preview", True)))}
+        </section>
+
+        <section class="form-section">
+          <h3 class="form-section-title">通用 Webhook</h3>
+          {checkbox_field("webhook_enabled", "启用 Webhook", bool(webhook.get("enabled")), "会 POST JSON 到你填写的 URL，适合接 Bark、Server酱、企业微信/飞书中转。")}
+          {input_field("webhook_url", "Webhook URL", webhook.get("url", ""), placeholder="https://example.com/notify")}
+        </section>
+
+        <section class="form-section">
+          <h3 class="form-section-title">SMTP 邮件</h3>
+          {checkbox_field("smtp_enabled", "启用邮件通知", bool(smtp.get("enabled")), "适合发到 iCloud、QQ、Gmail 或自建邮箱。")}
+          <div class="credential-grid">
+            {input_field("smtp_host", "SMTP 主机", smtp.get("host", ""), placeholder="smtp.example.com")}
+            {input_field("smtp_port", "SMTP 端口", smtp.get("port", 587), "number")}
+          </div>
+          <div class="credential-grid">
+            {input_field("smtp_username", "SMTP 用户名", smtp.get("username", ""))}
+            {input_field("smtp_password", "SMTP 密码/授权码", "", "password", hint="留空则保留原密码。")}
+          </div>
+          <div class="credential-grid">
+            {input_field("smtp_sender", "发件人", smtp.get("sender", ""), placeholder="alert@example.com")}
+            {input_field("smtp_recipients", "收件人", smtp.get("recipients", ""), placeholder="a@example.com,b@example.com")}
+          </div>
+          {checkbox_field("smtp_use_tls", "使用 STARTTLS", bool(smtp.get("use_tls", True)), "大多数 587 端口邮箱使用 STARTTLS；465 端口通常关闭这个开关。")}
+        </section>
+      </div>
+      <div class="card-footer d-flex align-items-center gap-2">
+        <div class="submit-feedback"><span class="spinner-dot"></span><span>正在保存通知配置...</span></div>
+        <button class="btn btn-primary btn-submit ms-auto" type="submit" data-submit-button data-loading-text="正在保存...">保存通知设置</button>
+      </div>
+    </form>
+    <div class="card mt-3">
+      <div class="card-header"><h3 class="card-title">测试通知</h3></div>
+      <div class="card-body">
+        <p class="text-secondary mb-3">保存设置后，可以发送一条测试消息确认 Telegram、Webhook 或邮件是否能收到。</p>
+        <form method="post" action="/notifications/test">
+          <button class="btn" type="submit">发送测试通知</button>
+        </form>
+      </div>
+    </div>
+    """
+    return page_shell(
+        "notifications",
+        "通知设置",
+        "Telegram、Webhook、邮件和每日流量报告",
+        body,
+        actions='<a href="/" class="btn">返回总览</a>',
+        flash=flash,
+        auto_refresh=False,
+    )
+
+
+def checked(fields: dict[str, list[str]], name: str) -> bool:
+    return form_value(fields, name) == "1"
+
+
+def save_notifications(fields: dict[str, list[str]]) -> None:
+    existing = notifications.load_config()
+    telegram_token = form_value(fields, "telegram_bot_token")
+    smtp_password = form_value(fields, "smtp_password")
+    config = {
+        "enabled": checked(fields, "enabled"),
+        "rules": {
+            "notify_actions": checked(fields, "notify_actions"),
+            "notify_warnings": checked(fields, "notify_warnings"),
+            "notify_errors": checked(fields, "notify_errors"),
+            "daily_report": checked(fields, "daily_report"),
+            "daily_report_time": form_value(fields, "daily_report_time", "09:00"),
+            "timezone": form_value(fields, "timezone", "Asia/Shanghai"),
+        },
+        "telegram": {
+            "enabled": checked(fields, "telegram_enabled"),
+            "bot_token": telegram_token or existing.get("telegram", {}).get("bot_token", ""),
+            "chat_id": form_value(fields, "telegram_chat_id"),
+            "disable_web_page_preview": checked(fields, "telegram_disable_preview"),
+        },
+        "webhook": {
+            "enabled": checked(fields, "webhook_enabled"),
+            "url": form_value(fields, "webhook_url"),
+        },
+        "smtp": {
+            "enabled": checked(fields, "smtp_enabled"),
+            "host": form_value(fields, "smtp_host"),
+            "port": int(as_float(form_value(fields, "smtp_port"), 587)),
+            "username": form_value(fields, "smtp_username"),
+            "password": smtp_password or existing.get("smtp", {}).get("password", ""),
+            "sender": form_value(fields, "smtp_sender"),
+            "recipients": form_value(fields, "smtp_recipients"),
+            "use_tls": checked(fields, "smtp_use_tls"),
+        },
+    }
+    notifications.save_config(config)
+
+
 def input_field(name: str, label: str, value="", field_type: str = "text", placeholder: str = "", hint: str = "", required: bool = False) -> str:
     required_attr = " required" if required else ""
     hint_html = f'<div class="form-hint">{esc(hint)}</div>' if hint else ""
@@ -2107,6 +2249,19 @@ def select_field(name: str, label: str, value: str, options: list[tuple[str, str
         f'{hint_html}'
         '</div>'
     )
+
+
+def checkbox_field(name: str, label: str, checked: bool, hint: str = "") -> str:
+    hint_html = f'<div class="form-hint">{esc(hint)}</div>' if hint else ""
+    return f"""
+      <div class="mb-3">
+        <label class="form-check">
+          <input class="form-check-input" type="checkbox" name="{esc(name)}" value="1" {"checked" if checked else ""}>
+          <span class="form-check-label">{esc(label)}</span>
+        </label>
+        {hint_html}
+      </div>
+    """
 
 
 def render_form_guide() -> str:
@@ -2332,6 +2487,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/logs":
             self.send_bytes(render_logs_page(query), "text/html; charset=utf-8")
             return
+        if parsed.path == "/notifications":
+            self.send_bytes(render_notifications_page(query), "text/html; charset=utf-8")
+            return
         if parsed.path == "/api/status":
             self.send_json(read_json(STATUS_FILE, {"error": "status not found"}))
             return
@@ -2386,6 +2544,14 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/guard/run":
             run_guard_now()
             self.redirect("/?flash=checked")
+            return
+        if parsed.path == "/notifications/save":
+            save_notifications(fields)
+            self.redirect("/notifications?flash=notify_saved")
+            return
+        if parsed.path == "/notifications/test":
+            result = notifications.send_test_message()
+            self.redirect("/notifications?flash=notify_test_sent" if result.get("ok") else "/notifications?flash=notify_test_failed")
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")

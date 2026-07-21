@@ -19,6 +19,8 @@ from aliyunsdkecs.request.v20140526 import (
     StopInstancesRequest,
 )
 
+import notifications
+
 BASE_DIR = Path("/opt/aliyun-cdt-guard")
 ENV_FILE = BASE_DIR / "guard.env"
 CONFIG_FILE = BASE_DIR / "instances.json"
@@ -610,6 +612,12 @@ def run_guard() -> dict[str, Any]:
     for event in events:
         append_history(event)
     prune_history()
+    try:
+        sent_notifications = notifications.handle_guard_notifications(status, previous_status)
+        for item in sent_notifications:
+            logger.info("notification sent: %s %s", item.get("id"), item.get("title"))
+    except Exception as exc:
+        logger.exception("notification handling failed: %s", exc)
     return status
 
 
@@ -696,6 +704,22 @@ def manual_power(server_id: str, power_action: str) -> dict[str, Any]:
     }
     append_history(event)
     prune_history()
+    try:
+        notifications.send_message(
+            f"Aliyun CDT Guard {notifications.action_label(action)}",
+            notifications.instance_line(
+                {
+                    **item,
+                    "status": status,
+                    "action": action,
+                    "reason": reason,
+                    "traffic_gb": None,
+                }
+            ),
+            {"event": event},
+        )
+    except Exception as exc:
+        logger.exception("manual power notification failed: %s", exc)
     logger.info("%s %s status=%s response=%s", item["id"], action, status, api_response)
     return event
 

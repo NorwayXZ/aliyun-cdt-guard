@@ -24,6 +24,8 @@ The difference is that servers, AccessKeys, thresholds, account notes and login 
 - Manual stop pauses automatic restart until the server is manually started again
 - Server product name, provider, panel URL, panel account/password, SSH notes and custom notes
 - Passwords are hidden by default in the UI
+- Telegram, Webhook and SMTP email notifications
+- Daily traffic report
 - `systemd` timer checks every minute
 - `status.json` and `history.jsonl` for API and audit history
 - No database required
@@ -93,6 +95,40 @@ Every enabled server in the same pool sees the same pool usage. When the pool re
 
 If the same Aliyun account uses multiple RAM AccessKeys, give those servers the same custom Traffic pool ID. If they are different Aliyun accounts, use different pool IDs so their quotas are not mixed.
 
+## Notifications
+
+Open `通知设置` in the web panel to configure alert channels.
+
+Supported channels:
+
+- Telegram Bot
+- Generic Webhook
+- SMTP email
+
+Notification rules:
+
+- Automatic start/stop actions
+- First traffic warning after entering the warning threshold
+- First new check error
+- Daily traffic report at a configured local time
+
+Telegram setup:
+
+1. Create a bot with Telegram `@BotFather`.
+2. Copy the Bot Token into the panel.
+3. Send one message to the bot, or add it to your group/channel.
+4. Fill the Chat ID in the panel.
+5. Save settings and click `发送测试通知`.
+
+The notification config is stored in:
+
+```text
+/opt/aliyun-cdt-guard/notifications.json
+/opt/aliyun-cdt-guard/notification_state.json
+```
+
+Both files are written as root-only `0600`.
+
 ## Threshold Logic
 
 Recommended values for Hong Kong CDT free traffic protection:
@@ -124,6 +160,7 @@ When the next monthly CDT cycle resets and traffic drops below the start thresho
 /opt/aliyun-cdt-guard/status.json     latest status
 /opt/aliyun-cdt-guard/history.jsonl   history events
 /opt/aliyun-cdt-guard/web.env         web username/password
+/opt/aliyun-cdt-guard/notifications.json notification settings
 ```
 
 ## Commands
@@ -153,6 +190,7 @@ sudo systemctl restart cdt-guard-web.service
 - Do not expose this panel without a firewall or trusted network.
 - The panel uses HTTP Basic Auth by default.
 - `instances.json` contains AccessKeys and optional account passwords, and is installed as root-only `0600`.
+- `notifications.json` may contain Bot Tokens, Webhook URLs and SMTP passwords, and is installed as root-only `0600`.
 - For production use, put the panel behind HTTPS and restrict source IPs.
 - Use a RAM user with minimum permissions:
 
