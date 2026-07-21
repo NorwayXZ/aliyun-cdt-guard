@@ -7,6 +7,7 @@ import html
 import json
 import os
 import secrets
+import shutil
 import socket
 import subprocess
 import time
@@ -25,6 +26,7 @@ CONFIG_FILE = BASE_DIR / "instances.json"
 STATUS_FILE = BASE_DIR / "status.json"
 HISTORY_FILE = BASE_DIR / "history.jsonl"
 DOMAIN_PROXY_FILE = BASE_DIR / "domain_proxy.json"
+DOMAIN_PROXY_STATE_FILE = BASE_DIR / "domain_proxy_state.json"
 TRAFFIC_SCOPE_REGION = "region"
 TRAFFIC_SCOPE_ACCOUNT_NON_CHINA = "account_non_china"
 TRAFFIC_SCOPE_ACCOUNT_ALL = "account_all"
@@ -496,6 +498,7 @@ def flash_message(code: str) -> str:
         "domain_applied": "已应用 Caddy 反代配置，请稍后用 HTTPS 域名访问",
         "domain_apply_domain_invalid": "域名格式不正确，请先填写类似 cdt.example.com 的完整域名",
         "domain_apply_port_invalid": "源站端口不正确，请填写面板实际监听端口，例如 8787",
+        "domain_apply_disk_low": "服务器磁盘可用空间不足，已尝试清理 apt 缓存；请扩容或继续清理磁盘后重试",
         "domain_apply_install_failed": "安装 Caddy 失败，请检查服务器 apt 源和网络是否正常",
         "domain_apply_write_failed": "写入 Caddy 配置失败，请确认面板以 root 权限运行",
         "domain_apply_restart_failed": "Caddy 配置已写入，但重启失败，请检查域名 DNS 和 80/443 端口",
@@ -508,6 +511,8 @@ def flash_message(code: str) -> str:
 
 
 def flash_class(code: str) -> str:
+    if code.startswith("domain_apply_") and code != "domain_applied":
+        return "alert-danger"
     if code.endswith("_failed") or code in {"login_failed", "telegram_discover_failed"}:
         return "alert-danger"
     return "alert-success"
@@ -1897,6 +1902,23 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     .proxy-status-chip.warn {{ background: var(--warning-soft); color: #b7791f; }}
     .proxy-status-chip.danger {{ background: var(--danger-soft); color: #c92a2a; }}
     .proxy-status-chip.muted {{ background: #eef2f6; color: #64748b; }}
+    .proxy-apply-log {{
+      background: #fff7ed;
+      border: 1px solid #fed7aa;
+      border-radius: 8px;
+      color: #9a3412;
+      font-size: 12px;
+      line-height: 1.55;
+      margin-top: 12px;
+      padding: 12px 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }}
+    .proxy-apply-log.is-ok {{
+      background: var(--success-soft);
+      border-color: #bbf7d0;
+      color: #148341;
+    }}
     .config-block {{
       background: #0f172a;
       border-radius: 8px;
@@ -3712,6 +3734,48 @@ def proxy_status_chip(kind: str, text: str) -> str:
     return f'<span class="proxy-status-chip {esc(kind)}">{esc(text)}</span>'
 
 
+def disk_free_mb(path: str = "/") -> int:
+    try:
+        return int(shutil.disk_usage(path).free / (1024 * 1024))
+    except OSError:
+        return 0
+
+
+def compact_output(text: str, limit: int = 1800) -> str:
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text
+    return "...\n" + text[-limit:]
+
+
+def write_domain_proxy_state(ok: bool, reason: str, detail: str = "") -> None:
+    write_json(
+        DOMAIN_PROXY_STATE_FILE,
+        {
+            "ok": ok,
+            "reason": reason,
+            "detail": compact_output(detail),
+            "disk_free_mb": disk_free_mb("/"),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+def read_domain_proxy_state() -> dict:
+    state = read_json(DOMAIN_PROXY_STATE_FILE, {})
+    return state if isinstance(state, dict) else {}
+
+
+def shell_result_detail(result: subprocess.CompletedProcess) -> str:
+    output = "\n".join(
+        part for part in [
+            getattr(result, "stdout", "") or "",
+            getattr(result, "stderr", "") or "",
+        ] if part
+    )
+    return compact_output(output)
+
+
 def update_web_env(updates: dict[str, str]) -> None:
     existing = []
     seen = set()
@@ -3736,25 +3800,44 @@ def apply_caddy_proxy() -> tuple[bool, str]:
     domain = str(config.get("domain") or "").strip().lower()
     origin_port = str(config.get("origin_port") or "8787").strip()
     if not valid_domain(domain):
+        write_domain_proxy_state(False, "domain_invalid", "域名格式不正确。")
         return False, "domain_invalid"
     if not origin_port.isdigit():
+        write_domain_proxy_state(False, "port_invalid", "源站端口不是数字。")
         return False, "port_invalid"
 
     install_script = """
 set -e
 if ! command -v caddy >/dev/null 2>&1; then
+  apt-get clean || true
+  rm -rf /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/* || true
+  export DEBIAN_FRONTEND=noninteractive
+  export NEEDRESTART_MODE=a
   apt-get update
   apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gpg
   install -d -m 0755 /usr/share/keyrings
   rm -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
   apt-get update
   apt-get install -y caddy
+  apt-get clean || true
 fi
 """
-    result = subprocess.run(["/bin/sh", "-lc", install_script], cwd=str(BASE_DIR), timeout=240, check=False)
+    result = subprocess.run(
+        ["/bin/sh", "-lc", install_script],
+        cwd=str(BASE_DIR),
+        timeout=300,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     if result.returncode != 0:
+        detail = shell_result_detail(result)
+        if "No space left on device" in detail or disk_free_mb("/") < 120:
+            write_domain_proxy_state(False, "disk_low", detail)
+            return False, "disk_low"
+        write_domain_proxy_state(False, "install_failed", detail)
         return False, "install_failed"
 
     caddyfile = Path("/etc/caddy/Caddyfile")
@@ -3768,12 +3851,15 @@ fi
             encoding="utf-8",
         )
         update_web_env({"WEB_COOKIE_SECURE": "true"})
-    except Exception:
+    except Exception as exc:
+        write_domain_proxy_state(False, "write_failed", str(exc))
         return False, "write_failed"
 
-    reload_result = subprocess.run(["systemctl", "restart", "caddy"], timeout=60, check=False)
+    reload_result = subprocess.run(["systemctl", "restart", "caddy"], timeout=60, capture_output=True, text=True, check=False)
     if reload_result.returncode != 0:
+        write_domain_proxy_state(False, "restart_failed", shell_result_detail(reload_result))
         return False, "restart_failed"
+    write_domain_proxy_state(True, "ok", f"Caddy 已应用：{domain} -> 127.0.0.1:{origin_port}")
     return True, "ok"
 
 
@@ -3805,6 +3891,8 @@ def render_domain_page(query: dict[str, list[str]] | None = None) -> bytes:
     cloudflare_proxy = bool(config.get("cloudflare_proxy", True))
     caddy_installed = command_exists("caddy")
     caddy_state = service_state("caddy") if caddy_installed else "未安装"
+    free_mb = disk_free_mb("/")
+    apply_state = read_domain_proxy_state()
     resolved_ips = resolve_domain_ips(saved_domain)
     if not saved_domain:
         dns_chip = proxy_status_chip("muted", "未填写域名")
@@ -3827,6 +3915,27 @@ def render_domain_page(query: dict[str, list[str]] | None = None) -> bytes:
         caddy_chip = proxy_status_chip("warn", f"Caddy {caddy_state}")
     else:
         caddy_chip = proxy_status_chip("muted", "未安装 Caddy")
+    if free_mb >= 800:
+        disk_chip = proxy_status_chip("ok", f"剩余 {free_mb} MB")
+        disk_hint = "空间充足，可以正常安装和更新依赖。"
+    elif free_mb >= 300:
+        disk_chip = proxy_status_chip("warn", f"剩余 {free_mb} MB")
+        disk_hint = "空间偏紧，安装 Caddy 可能成功，但建议扩容或清理日志。"
+    else:
+        disk_chip = proxy_status_chip("danger", f"剩余 {free_mb} MB")
+        disk_hint = "空间不足，apt 安装很容易失败，请先扩容或清理磁盘。"
+    apply_log_html = ""
+    if apply_state:
+        state_ok = bool(apply_state.get("ok"))
+        reason = str(apply_state.get("reason") or "unknown")
+        detail = str(apply_state.get("detail") or "")
+        updated_at = str(apply_state.get("updated_at") or "")
+        apply_log_html = f"""
+        <div class="proxy-apply-log {'is-ok' if state_ok else ''}">
+          最近一次应用：{esc('成功' if state_ok else '失败')} · {esc(reason)} · {esc(updated_at)}
+          {f'<br>{esc(detail)}' if detail else ''}
+        </div>
+        """
     dns_name = domain.split(".", 1)[0] if "." in domain else domain
     caddy_config = f"""
 {domain} {{
@@ -3864,11 +3973,17 @@ server {{
             <div class="proxy-status-hint">点击“保存并应用 Caddy”后，面板会自动安装/写入/重启 Caddy。</div>
           </div>
           <div class="proxy-status-item">
+            <div class="proxy-status-label">磁盘空间</div>
+            <div class="proxy-status-value">{disk_chip}</div>
+            <div class="proxy-status-hint">{esc(disk_hint)}</div>
+          </div>
+          <div class="proxy-status-item">
             <div class="proxy-status-label">最终访问地址</div>
             <div class="proxy-status-value">https://{esc(domain)}</div>
             <div class="proxy-status-hint">DNS 指向本机且 80/443 放行后，用这个地址登录面板。</div>
           </div>
         </div>
+        {apply_log_html}
       </div>
     </div>
 
