@@ -1227,6 +1227,39 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       min-height: 320px;
       width: 100%;
     }}
+    .chart-legend {{
+      align-items: center;
+      background: rgba(255, 255, 255, .88);
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      display: flex;
+      gap: 12px;
+      left: 14px;
+      padding: 6px 8px;
+      position: absolute;
+      top: 12px;
+      z-index: 1;
+    }}
+    .legend-item {{
+      align-items: center;
+      color: #475569;
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 720;
+      gap: 6px;
+    }}
+    .legend-line {{
+      background: var(--accent);
+      border-radius: 999px;
+      height: 3px;
+      width: 22px;
+    }}
+    .legend-bar {{
+      background: rgba(245, 159, 0, .42);
+      border-radius: 3px;
+      height: 12px;
+      width: 12px;
+    }}
     .chart-empty {{
       align-items: center;
       color: var(--muted);
@@ -1600,6 +1633,10 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
           <div class="chart-stat"><div class="chart-stat-label">时间范围</div><div class="chart-stat-value" data-chart-range>--</div></div>
         </div>
         <div class="traffic-chart-wrap">
+          <div class="chart-legend">
+            <span class="legend-item"><span class="legend-line"></span>累计流量 GB</span>
+            <span class="legend-item"><span class="legend-bar"></span>本次新增 GB</span>
+          </div>
           <svg class="traffic-chart" viewBox="0 0 760 320" data-chart-svg aria-label="流量曲线"></svg>
           <div class="chart-tooltip" data-chart-tooltip></div>
           <div class="chart-empty" data-chart-empty>暂无历史数据。手动检查或等待定时巡检后会开始记录。</div>
@@ -1737,11 +1774,25 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       const number = Number(value || 0);
       return number.toFixed(2) + " GB";
     }}
+    function axisGbText(value, span) {{
+      const number = Number(value || 0);
+      const digits = span < 0.1 ? 3 : 2;
+      return number.toFixed(digits) + " GB";
+    }}
     function timeText(value) {{
       if (!value) return "暂无";
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return value;
       return date.toLocaleString("zh-CN", {{ hour12: false }});
+    }}
+    function axisTimeText(value, days) {{
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      const options = days <= 1
+        ? {{ hour: "2-digit", minute: "2-digit", hour12: false }}
+        : {{ month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }};
+      return date.toLocaleString("zh-CN", options);
     }}
     function setModalOpen(open) {{
       const modal = document.querySelector("[data-traffic-modal]");
@@ -1812,13 +1863,24 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
 
       const width = 760;
       const height = 320;
-      const pad = {{ left: 54, right: 24, top: 24, bottom: 42 }};
+      const pad = {{ left: 72, right: 26, top: 42, bottom: 58 }};
       const values = points.map((point) => Number(point.traffic_gb || 0));
       const deltas = points.map((point) => Number(point.delta_gb || 0));
-      const minValue = Math.min(...values);
-      const maxValue = Math.max(...values);
+      let minValue = Math.min(...values);
+      let maxValue = Math.max(...values);
       const maxDelta = Math.max(...deltas, 0.001);
-      const span = maxValue - minValue || 1;
+      let span = maxValue - minValue;
+      if (span < 0.01) {{
+        const center = (maxValue + minValue) / 2;
+        span = Math.max(0.01, center * 0.002);
+        minValue = Math.max(0, center - span / 2);
+        maxValue = center + span / 2;
+      }} else {{
+        const padding = span * 0.12;
+        minValue = Math.max(0, minValue - padding);
+        maxValue = maxValue + padding;
+        span = maxValue - minValue;
+      }}
       const plotW = width - pad.left - pad.right;
       const plotH = height - pad.top - pad.bottom;
       const xAt = (index) => pad.left + (points.length === 1 ? plotW : index * plotW / (points.length - 1));
@@ -1836,19 +1898,29 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       for (let i = 0; i <= 4; i += 1) {{
         const y = pad.top + i * plotH / 4;
         add("line", {{ x1: pad.left, y1: y, x2: width - pad.right, y2: y, stroke: "#e5e7eb", "stroke-width": "1" }});
+        const value = maxValue - i * span / 4;
+        add("text", {{ x: pad.left - 10, y: y + 4, fill: "#64748b", "font-size": "11", "text-anchor": "end" }}).textContent = axisGbText(value, span);
+      }}
+      add("line", {{ x1: pad.left, y1: pad.top, x2: pad.left, y2: barY, stroke: "#cbd5e1", "stroke-width": "1" }});
+      add("line", {{ x1: pad.left, y1: barY, x2: width - pad.right, y2: barY, stroke: "#cbd5e1", "stroke-width": "1" }});
+      add("text", {{ x: pad.left, y: 18, fill: "#475569", "font-size": "12", "font-weight": "700" }}).textContent = "纵轴：累计流量 GB";
+      add("text", {{ x: width - pad.right, y: height - 8, fill: "#475569", "font-size": "12", "font-weight": "700", "text-anchor": "end" }}).textContent = "横轴：时间点";
+
+      const tickCount = Math.min(5, points.length);
+      for (let i = 0; i < tickCount; i += 1) {{
+        const index = tickCount === 1 ? 0 : Math.round(i * (points.length - 1) / (tickCount - 1));
+        const x = xAt(index);
+        add("line", {{ x1: x, y1: barY, x2: x, y2: barY + 5, stroke: "#94a3b8", "stroke-width": "1" }});
+        add("text", {{ x, y: barY + 20, fill: "#64748b", "font-size": "11", "text-anchor": i === 0 ? "start" : (i === tickCount - 1 ? "end" : "middle") }}).textContent = axisTimeText(points[index].at, data.days);
       }}
       points.forEach((point, index) => {{
         const delta = Number(point.delta_gb || 0);
         if (delta <= 0) return;
-        const h = Math.max(2, delta / maxDelta * 58);
-        add("rect", {{ x: xAt(index) - barW / 2, y: barY - h, width: barW, height: h, rx: "2", fill: "rgba(245, 159, 0, .36)" }});
+        const h = Math.max(2, delta / maxDelta * Math.min(72, plotH * 0.32));
+        add("rect", {{ x: xAt(index) - barW / 2, y: barY - h, width: barW, height: h, rx: "2", fill: "rgba(245, 159, 0, .38)" }});
       }});
       const line = values.map((value, index) => `${{xAt(index).toFixed(1)}},${{yAt(value).toFixed(1)}}`).join(" ");
       add("polyline", {{ points: line, fill: "none", stroke: "#1763d1", "stroke-width": "3", "stroke-linecap": "round", "stroke-linejoin": "round" }});
-      add("text", {{ x: pad.left, y: height - 12, fill: "#64748b", "font-size": "12" }}).textContent = timeText(points[0].at);
-      add("text", {{ x: width - pad.right, y: height - 12, fill: "#64748b", "font-size": "12", "text-anchor": "end" }}).textContent = timeText(points[points.length - 1].at);
-      add("text", {{ x: 10, y: pad.top + 4, fill: "#64748b", "font-size": "12" }}).textContent = gbText(maxValue);
-      add("text", {{ x: 10, y: pad.top + plotH, fill: "#64748b", "font-size": "12" }}).textContent = gbText(minValue);
 
       const tooltip = document.querySelector("[data-chart-tooltip]");
       const markerStep = Math.max(1, Math.ceil(points.length / 180));
@@ -1856,15 +1928,21 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
         if (index % markerStep !== 0 && index !== points.length - 1) return;
         const cx = xAt(index);
         const cy = yAt(Number(point.traffic_gb || 0));
-        const circle = add("circle", {{ cx, cy, r: "7", fill: "transparent", stroke: "transparent" }});
+        const guide = add("line", {{ x1: cx, y1: pad.top, x2: cx, y2: barY, stroke: "rgba(23,99,209,.22)", "stroke-width": "1", "stroke-dasharray": "4 4", opacity: "0" }});
+        const dot = add("circle", {{ cx, cy, r: "4", fill: "#fff", stroke: "#1763d1", "stroke-width": "2", opacity: "0" }});
+        const circle = add("circle", {{ cx, cy, r: "10", fill: "transparent", stroke: "transparent" }});
         circle.addEventListener("pointermove", () => {{
           if (!tooltip) return;
-          tooltip.innerHTML = `${{timeText(point.at)}}<br>累计：${{gbText(point.traffic_gb)}}<br>新增：${{gbText(point.delta_gb)}}`;
+          guide.setAttribute("opacity", "1");
+          dot.setAttribute("opacity", "1");
+          tooltip.innerHTML = `时间：${{timeText(point.at)}}<br>累计流量：${{gbText(point.traffic_gb)}}<br>本次新增：${{gbText(point.delta_gb)}}`;
           tooltip.style.display = "block";
           tooltip.style.left = (cx / width * 100) + "%";
           tooltip.style.top = (cy / height * 100) + "%";
         }});
         circle.addEventListener("pointerleave", () => {{
+          guide.setAttribute("opacity", "0");
+          dot.setAttribute("opacity", "0");
           if (tooltip) tooltip.style.display = "none";
         }});
       }});
