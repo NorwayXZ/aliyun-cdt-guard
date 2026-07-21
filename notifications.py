@@ -633,6 +633,7 @@ def handle_guard_notifications(
 def send_test_message() -> dict[str, Any]:
     return send_message(
         "Aliyun CDT Guard 测试通知",
-        "如果你收到这条消息，说明通知渠道已经配置成功。",
+        "如果你收到这条消息，说明通知渠道已经配置成功。\n\n"
+        f"{telegram_help_text()}",
         {"type": "test"},
     )

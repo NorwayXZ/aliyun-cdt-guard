@@ -2780,7 +2780,7 @@ def render_notifications_page(query: dict[str, list[str]] | None = None) -> byte
     <div class="card mt-3">
       <div class="card-header"><h3 class="card-title">测试通知</h3></div>
       <div class="card-body">
-        <p class="text-secondary mb-3">保存设置后，可以发送一条测试消息确认 Telegram、Webhook 或邮件是否能收到。</p>
+        <p class="text-secondary mb-3">保存设置后，可以发送一条测试消息确认 Telegram、Webhook 或邮件是否能收到；测试消息会附带 Telegram 主动查询命令，方便新用户直接照着使用。</p>
         <form method="post" action="/notifications/test">
           <button class="btn" type="submit">发送测试通知</button>
         </form>
