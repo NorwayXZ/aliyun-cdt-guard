@@ -1631,7 +1631,8 @@ def render_form(item: dict) -> str:
     title = "编辑服务器" if is_edit else "新增服务器"
     id_value = item.get("id", "")
     access_key_id = item.get("access_key_id", "")
-    secret_hint = "编辑时留空则保留原 Secret" if is_edit else ""
+    access_key_hint = "编辑时留空则保留原 AccessKey ID 或继续使用全局配置。" if is_edit else "新增时不会自动填入已有密钥。"
+    secret_hint = "编辑时留空则保留原 Secret 或继续使用全局配置。" if is_edit else ""
     panel_password_hint = "编辑时留空则保留原密码" if is_edit else ""
     return f"""
     <form class="card save-form" method="post" action="/servers/save" data-save-form>
@@ -1657,7 +1658,7 @@ def render_form(item: dict) -> str:
             {input_field("traffic_region_id", "CDT 流量区域", item.get("traffic_region_id", item.get("region_id", "cn-hongkong")), placeholder="通常和区域 ID 一致")}
           </div>
           <div class="credential-grid">
-            {input_field("access_key_id", "阿里云 AccessKey ID", access_key_id, placeholder="粘贴 AccessKey ID", hint="新增时不会自动填入已有密钥。", required=True)}
+            {input_field("access_key_id", "阿里云 AccessKey ID", access_key_id, placeholder="粘贴 AccessKey ID", hint=access_key_hint, required=not is_edit)}
             {input_field("access_key_secret", "阿里云 AccessKey Secret", "", "password", placeholder="粘贴 AccessKey Secret", hint=secret_hint or "只在保存时写入配置文件，页面不会回显。", required=not is_edit)}
           </div>
         </section>
@@ -1715,6 +1716,7 @@ def save_server(fields: dict[str, list[str]]) -> str:
     server_id = original_id or slug(first_value(product_name, instance_id))
     existing = selected_instance(config, original_id) if original_id else {}
 
+    access_key_id = form_value(fields, "access_key_id") or existing.get("access_key_id", "")
     access_secret = form_value(fields, "access_key_secret")
     panel_password = form_value(fields, "panel_password")
     ssh_password = form_value(fields, "ssh_password")
@@ -1727,7 +1729,7 @@ def save_server(fields: dict[str, list[str]]) -> str:
         "region_id": form_value(fields, "region_id", "cn-hongkong"),
         "traffic_region_id": form_value(fields, "traffic_region_id") or form_value(fields, "region_id", "cn-hongkong"),
         "instance_id": instance_id,
-        "access_key_id": form_value(fields, "access_key_id"),
+        "access_key_id": access_key_id,
         "access_key_secret": access_secret or existing.get("access_key_secret", ""),
         "warning_threshold_gb": as_float(form_value(fields, "warning_threshold_gb"), 160),
         "stop_threshold_gb": as_float(form_value(fields, "stop_threshold_gb"), 180),
