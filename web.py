@@ -205,22 +205,206 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
   <title>Aliyun CDT Guard</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css">
   <style>
-    body {{ background: #f4f6fa; }}
-    .navbar-brand {{ letter-spacing: 0; }}
-    .page-wrapper {{ min-height: 100vh; }}
-    .page-header {{ margin-bottom: 1rem; }}
-    .table td {{ vertical-align: middle; }}
-    .note-cell {{ min-width: 220px; white-space: pre-wrap; }}
+    :root {{
+      --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --page-bg: #f6f7f9;
+      --surface: #ffffff;
+      --surface-soft: #fafbfc;
+      --line: #e5e7eb;
+      --line-strong: #d6d9df;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --accent: #1763d1;
+      --accent-soft: #eaf2ff;
+      --success-soft: #e9f8ef;
+      --warning-soft: #fff7df;
+      --danger-soft: #ffeded;
+    }}
+    html, body {{
+      font-family: var(--font-sans);
+      letter-spacing: 0;
+    }}
+    body {{
+      background:
+        radial-gradient(circle at top left, rgba(23, 99, 209, 0.06), transparent 360px),
+        var(--page-bg);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }}
+    .page {{ min-height: 100vh; }}
+    .navbar-vertical {{
+      width: 248px;
+      background: #111827;
+      border-right: 1px solid rgba(255,255,255,0.06);
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.12);
+    }}
+    .navbar-brand {{
+      align-items: flex-start;
+      color: #fff;
+      font-size: 18px;
+      font-weight: 720;
+      letter-spacing: 0;
+      line-height: 1.2;
+      padding: 24px 22px 14px;
+    }}
+    .navbar .nav-link {{
+      border-radius: 8px;
+      color: #b7c0cf;
+      font-size: 14px;
+      margin: 3px 12px;
+      padding: 10px 12px;
+      transition: background .15s ease, color .15s ease;
+    }}
+    .navbar .nav-link:hover {{
+      background: rgba(255,255,255,0.07);
+      color: #fff;
+    }}
+    .navbar .nav-item.active .nav-link {{
+      background: rgba(255,255,255,0.11);
+      color: #fff;
+      font-weight: 650;
+    }}
+    .page-wrapper {{
+      min-height: 100vh;
+      background: transparent;
+    }}
+    .navbar-expand-md.d-print-none {{
+      background: rgba(255,255,255,0.86);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(12px);
+      min-height: 74px;
+    }}
+    .container-xl {{
+      max-width: 1500px;
+      padding-left: 32px;
+      padding-right: 32px;
+    }}
+    .page-body {{ margin-top: 24px; }}
+    .page-title {{
+      color: #111827;
+      font-size: 24px;
+      font-weight: 720;
+      letter-spacing: 0;
+      line-height: 1.25;
+    }}
+    .text-secondary {{ color: var(--muted) !important; }}
+    .card {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 10px 34px rgba(15, 23, 42, 0.04);
+    }}
+    .card-header {{
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      min-height: 64px;
+      padding: 18px 22px;
+    }}
+    .card-title {{
+      color: #111827;
+      font-size: 16px;
+      font-weight: 720;
+      letter-spacing: 0;
+    }}
+    .stat-card .card-body {{ padding: 18px 20px; }}
+    .stat-card .subheader {{
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 680;
+      letter-spacing: 0;
+      text-transform: none;
+    }}
+    .stat-card .h1 {{
+      color: #111827;
+      font-size: 30px;
+      font-weight: 720;
+      margin-top: 8px;
+    }}
+    .stat-card .stat-line {{
+      height: 3px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      margin-top: 14px;
+      overflow: hidden;
+    }}
+    .stat-card .stat-line span {{ display: block; height: 100%; width: 40%; background: var(--accent); }}
+    .table {{
+      --tblr-table-bg: transparent;
+      color: var(--ink);
+      font-size: 14px;
+    }}
+    .table thead th {{
+      background: var(--surface-soft);
+      border-bottom: 1px solid var(--line);
+      color: #687386;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      padding: 13px 16px;
+      white-space: nowrap;
+    }}
+    .table tbody td {{
+      border-color: var(--line);
+      padding: 18px 16px;
+      vertical-align: middle;
+    }}
+    .table tbody tr:hover {{ background: #fbfcfe; }}
+    .asset-name {{
+      color: #111827;
+      font-size: 15px;
+      font-weight: 720;
+      line-height: 1.35;
+    }}
+    .asset-sub {{ color: var(--muted); font-size: 12px; margin-top: 3px; }}
+    .ip-main {{
+      color: #111827;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 15px;
+      font-weight: 650;
+    }}
+    .progress {{
+      background: #edf0f4;
+      height: 7px;
+      overflow: hidden;
+    }}
+    .badge {{
+      border-radius: 999px;
+      font-weight: 680;
+      padding: 4px 9px;
+    }}
+    .btn {{
+      border-radius: 7px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }}
+    .btn-primary {{
+      background: var(--accent);
+      border-color: var(--accent);
+      box-shadow: 0 8px 18px rgba(23, 99, 209, 0.18);
+    }}
+    .note-cell {{ min-width: 240px; max-width: 340px; white-space: pre-wrap; }}
     .btn-list form {{ display: inline-block; margin: 0; }}
-    .form-hint {{ margin-top: 4px; }}
-    .credential-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
-    .log-layout {{ display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; }}
+    .form-control, .form-select {{
+      border-color: var(--line-strong);
+      border-radius: 8px;
+      min-height: 42px;
+    }}
+    .form-control:focus {{
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(23, 99, 209, 0.12);
+    }}
+    .form-label {{ color: #1f2937; font-weight: 680; }}
+    .form-hint {{ margin-top: 5px; }}
+    .credential-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
+    .log-layout {{ display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; }}
     .log-item summary {{ cursor: pointer; list-style: none; }}
     .log-item summary::-webkit-details-marker {{ display: none; }}
-    .log-meta {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; }}
+    .log-meta {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; }}
     .grid-full {{ grid-column: 1 / -1; }}
     .asset-toolbar {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
     @media (max-width: 992px) {{
+      .navbar-vertical {{ width: 100%; }}
+      .container-xl {{ padding-left: 16px; padding-right: 16px; }}
       .credential-grid, .log-layout, .log-meta {{ grid-template-columns: 1fr; }}
       .table-responsive {{ min-height: 0; }}
     }}
@@ -276,20 +460,22 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
 
 def render_check_action() -> str:
     return """
-    <form method="post" action="/guard/run">
-      <button class="btn btn-primary" type="submit" title="马上查询 CDT 流量和 ECS 状态，并按阈值执行一次保护判断">手动检查流量</button>
-    </form>
+    <div>
+      <form method="post" action="/guard/run">
+        <button class="btn btn-primary" type="submit" title="马上查询 CDT 流量和 ECS 状态，并按阈值执行一次保护判断">手动检查流量</button>
+      </form>
+    </div>
     """
 
 
 def render_summary_cards(summary: dict) -> str:
     return f"""
-    <div class="row row-deck row-cards mb-3">
-      <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">总机器</div><div class="h1 mb-0">{esc(summary.get('total', 0))}</div></div></div></div>
-      <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">启用</div><div class="h1 mb-0">{esc(summary.get('enabled', 0))}</div></div></div></div>
-      <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">预警</div><div class="h1 mb-0 text-yellow">{esc(summary.get('warnings', 0))}</div></div></div></div>
-      <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">错误</div><div class="h1 mb-0 text-red">{esc(summary.get('errors', 0))}</div></div></div></div>
-      <div class="col-sm-6 col-lg"><div class="card"><div class="card-body"><div class="subheader">已停止</div><div class="h1 mb-0">{esc(summary.get('stopped', 0))}</div></div></div></div>
+    <div class="row row-deck row-cards mb-4">
+      <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">总机器</div><div class="h1 mb-0">{esc(summary.get('total', 0))}</div><div class="stat-line"><span style="width:100%"></span></div></div></div></div>
+      <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">启用保护</div><div class="h1 mb-0">{esc(summary.get('enabled', 0))}</div><div class="stat-line"><span style="width:70%"></span></div></div></div></div>
+      <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">流量预警</div><div class="h1 mb-0 text-yellow">{esc(summary.get('warnings', 0))}</div><div class="stat-line"><span style="width:28%; background:#f59f00"></span></div></div></div></div>
+      <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">检查错误</div><div class="h1 mb-0 text-red">{esc(summary.get('errors', 0))}</div><div class="stat-line"><span style="width:28%; background:#d63939"></span></div></div></div></div>
+      <div class="col-sm-6 col-xl"><div class="card stat-card"><div class="card-body"><div class="subheader">已停止</div><div class="h1 mb-0">{esc(summary.get('stopped', 0))}</div><div class="stat-line"><span style="width:28%; background:#64748b"></span></div></div></div></div>
     </div>
     """
 
@@ -323,12 +509,12 @@ def render_asset_rows(instances: list[dict], metadata: dict[str, dict]) -> str:
             f"""
             <tr>
               <td>
-                <div class="fw-bold">{esc(product_name)}</div>
-                <div class="text-secondary small">{esc(asset_label)}</div>
-                <div class="text-secondary small">{esc(provider)} · {esc(item.get('instance_name') or '未识别 ECS 名')}</div>
+                <div class="asset-name">{esc(product_name)}</div>
+                <div class="asset-sub">{esc(asset_label)}</div>
+                <div class="asset-sub">{esc(provider)} · {esc(item.get('instance_name') or '未识别 ECS 名')}</div>
               </td>
               <td>
-                <div class="font-monospace">{esc(primary_ip)}</div>
+                <div class="ip-main">{esc(primary_ip)}</div>
                 {small_line("公网 ", ", ".join(public_ips))}
                 {small_line("内网 ", ", ".join(private_ips))}
               </td>
@@ -426,7 +612,7 @@ def render_server_form_page(query: dict[str, list[str]] | None = None) -> bytes:
     config = read_config()
     edit_id = query.get("id", [""])[0]
     editing = selected_instance(config, edit_id)
-    body = f'<div class="row"><div class="col-xl-8 col-lg-10">{render_form(editing)}</div></div>'
+    body = f'<div class="row justify-content-center"><div class="col-xl-8 col-lg-10">{render_form(editing)}</div></div>'
     return page_shell(
         "servers",
         "新增/编辑服务器",
