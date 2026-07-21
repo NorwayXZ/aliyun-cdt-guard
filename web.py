@@ -992,6 +992,22 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       line-height: 1;
       padding: 6px 9px;
     }}
+    .pool-auto-advice {{
+      background: #eef6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      color: #174ea6;
+      font-size: 12px;
+      line-height: 1.55;
+      margin-bottom: 8px;
+      padding: 10px 12px;
+    }}
+    .pool-auto-advice strong {{
+      color: #0f3f8c;
+      display: block;
+      font-size: 13px;
+      margin-bottom: 2px;
+    }}
     .ip-main {{
       color: #111827;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -3553,13 +3569,20 @@ def traffic_pool_field(name: str, value: str, pool_options: list[tuple[str, str]
     )
     if chips:
         chips = f'<div class="pool-option-list">{chips}</div>'
-    hint = "选择已有分组，或留空让面板按 AccessKey 和统计方式自动归组。只有多个 RAM AccessKey 需要合并统计时，才建议手动填同一个分组名。"
+    advice = """
+      <div class="pool-auto-advice">
+        <strong>推荐：同一个阿里云账号的机器，这里直接留空</strong>
+        新增日本、香港、新加坡等非中国内地机器时，决定归属的是你填写的 AccessKey：填哪个阿里云账号的 AccessKey，就归到哪个账号池；上方选择“账号非中国内地共享池”，这里留空即可。
+      </div>
+    """
+    hint = "只有多个 RAM AccessKey 需要强制合并统计时，才手动选择已有分组或填写同一个新分组名。不同阿里云账号不要共用同一个手动分组。"
     if not pool_options:
-        hint += " 当前还没有可选择的共享池；第一次先留空，选择“账号非中国内地共享池”并保存巡检后，后续新增机器会出现可选分组。"
+        hint += " 当前没有手动分组可选，这不是错误；多数情况下保持留空即可。"
     return f"""
       <div class="mb-3">
-        <label class="form-label">流量池分组（可选）</label>
-        <input class="form-control" type="text" name="{esc(name)}" value="{esc(value)}" placeholder="留空自动归组；也可选择已有分组" list="{esc(list_id)}">
+        <label class="form-label">流量池分组（通常不用填）</label>
+        {advice}
+        <input class="form-control" type="text" name="{esc(name)}" value="{esc(value)}" placeholder="推荐留空：按阿里云账号自动归组" list="{esc(list_id)}">
         <datalist id="{esc(list_id)}">{option_html}</datalist>
         <div class="form-hint">{esc(hint)}</div>
         {chips}
@@ -3607,7 +3630,7 @@ def render_form_guide() -> str:
         </div>
         <div class="guide-step">
           <strong>6. 共享池不用去阿里云找 ID</strong>
-          <span>“流量池分组”是面板内部分组：同一阿里云账号共享 CDT 额度时，新增机器可选择已有分组；不确定就留空自动归组。</span>
+          <span>新增日本等非中国内地机器时，统计方式选“账号非中国内地共享池”，流量池分组通常留空；面板会按 AccessKey 自动归到同一账号池。</span>
         </div>
         <div class="guide-step">
           <strong>7. 账期优先走 BSS</strong>
