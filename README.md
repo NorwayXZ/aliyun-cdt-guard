@@ -1,198 +1,224 @@
 # Aliyun CDT Guard
 
-Aliyun CDT Guard is a small self-hosted web panel for managing Aliyun ECS traffic protection.
+Aliyun CDT Guard 是一个自托管的阿里云 ECS / CDT 流量保护面板。
 
-It keeps the original script logic simple:
+它把原来需要 SSH 上服务器手动改 Python 脚本的流程，变成了一个可以在网页里维护的面板：添加服务器、填写阿里云 AccessKey、设置 CDT 流量池和阈值、查看历史曲线、手动开关机、接入 Telegram/邮件/Webhook 通知。
 
-1. Query Aliyun CDT internet traffic.
-2. Query the ECS instance status.
-3. Start ECS when traffic is below the start threshold.
-4. Stop ECS when traffic reaches the stop threshold.
+适合这些场景：
 
-The difference is that servers, AccessKeys, thresholds, account notes and login information can be managed from the web panel.
+- 阿里云香港、日本、新加坡等 ECS 使用 CDT 免费/优惠流量额度。
+- 一个阿里云账号下多台机器共享同一个 200GB/220GB CDT 流量池。
+- 希望流量到阈值自动关机，月初流量恢复后自动开机。
+- 希望用域名登录面板，而不是直接访问 `IP:端口`。
+- 希望收到 Telegram、邮件或 Webhook 通知和每日流量报告。
 
-## Features
+## 功能
 
-- Tabler-based web dashboard
-- Add and edit Aliyun servers from the browser
-- Per-server AccessKey ID and AccessKey Secret
-- Per-server ECS Instance ID, region and CDT traffic region
-- CDT traffic pool mode for one account shared by multiple non-mainland servers
-- Warning, stop and recovery-start thresholds
-- ECS public/private IP discovery
-- Manual ECS start and stop buttons from the web panel
-- Manual stop pauses automatic restart until the server is manually started again
-- Server product name, provider, panel URL, panel account/password, SSH notes and custom notes
-- Passwords are hidden by default in the UI
-- Telegram, Webhook and SMTP email notifications
-- Daily traffic report
-- `systemd` timer checks every minute
-- `status.json` and `history.jsonl` for API and audit history
-- No database required
+- Tabler 风格网页面板
+- 正式登录页，不再依赖浏览器 Basic Auth 弹窗
+- 网页添加/编辑阿里云服务器
+- 每台服务器可独立保存 AccessKey ID / Secret
+- 支持 ECS Instance ID、区域、CDT 流量区域
+- 支持 CDT 共享流量池策略
+- 支持预警阈值、停机阈值、恢复启动阈值
+- 支持 ECS 公网/内网 IP 自动识别
+- 支持手动开机、关机
+- 手动关机会暂停自动启动，避免定时任务又拉起
+- 支持产品自定义名字、服务器 IP、登录网站、账号密码、SSH 备注
+- 支持 1 天、3 天、7 天、1 个月流量曲线
+- 支持服务器日志侧栏
+- 支持 Telegram Bot、Webhook、SMTP 邮件通知
+- 支持每日流量统计报告
+- systemd timer 默认每分钟巡检一次
+- 无数据库，配置和历史写在本地 JSON / JSONL 文件
 
-## One-Click Install
+## 一键安装
 
-Run on a Linux server that will act as the control panel host:
+在准备用作控制面板的 Linux 服务器上执行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NorwayXZ/aliyun-cdt-guard/main/install.sh | sudo bash
 ```
 
-The installer prints the web URL, username and random password.
+安装完成后会输出：
 
-Default panel port:
+```text
+Web panel:
+  URL:      http://服务器IP:8787
+  Username: admin
+  Password: 随机生成密码
+```
+
+默认端口：
 
 ```text
 8787
 ```
 
-## Manual Install
+自定义端口安装：
 
 ```bash
-git clone https://github.com/NorwayXZ/aliyun-cdt-guard.git
-cd aliyun-cdt-guard
-sudo bash install.sh
+curl -fsSL https://raw.githubusercontent.com/NorwayXZ/aliyun-cdt-guard/main/install.sh | sudo WEB_PORT=9000 bash
 ```
 
-## Add a Server
+## 一键卸载
 
-Open the web panel and fill:
+```bash
+curl -fsSL https://raw.githubusercontent.com/NorwayXZ/aliyun-cdt-guard/main/uninstall.sh | sudo bash
+```
 
-- Product custom name
-- Server IP, optional because ECS public IP can be discovered automatically
-- Aliyun AccessKey ID
-- Aliyun AccessKey Secret
-- Region ID, for example `cn-hongkong`
-- CDT traffic region, for example `cn-hongkong`
-- CDT scope:
-  - `按当前 CDT 区域统计`: only one CDT business region, compatible with older configs
-  - `账号非中国内地共享池`: Hong Kong, Japan, Singapore, US, Europe and other non-mainland regions under the same Aliyun account
-  - `账号全部 CDT 流量`: all CDT traffic returned by the account
-- Traffic pool ID, for example `global-200g`; use the same pool ID for servers sharing the same CDT quota
-- ECS Instance ID, for example `i-xxxxxxxx`
-- Warning threshold, for example `160`
-- Stop threshold, for example `180`
-- Recovery start threshold, for example `175`
-- Provider login website, username, password and notes if needed
-
-After saving, the panel immediately runs one check.
-
-## Shared CDT Pool Strategy
-
-If one Aliyun account owns several ECS instances and they share one monthly CDT quota, protect the quota as an account traffic pool instead of treating each server separately.
-
-Recommended setup for Hong Kong, Japan and other non-mainland ECS instances sharing a 200GB/220GB CDT allowance:
+卸载脚本会移除 systemd 服务和命令行入口，但默认保留：
 
 ```text
-CDT scope       = 账号非中国内地共享池
-Traffic pool ID = global-200g
-warning         = 160
-stop            = 180
-start           = 175
+/opt/aliyun-cdt-guard
 ```
 
-Every enabled server in the same pool sees the same pool usage. When the pool reaches the stop threshold, each server in that pool follows the stop policy. After the next monthly reset, if the pool drops below the recovery-start threshold, stopped servers can be started again unless they were manually stopped from the panel.
+这样可以避免误删 AccessKey、通知 Token、历史记录和服务器配置。
 
-If the same Aliyun account uses multiple RAM AccessKeys, give those servers the same custom Traffic pool ID. If they are different Aliyun accounts, use different pool IDs so their quotas are not mixed.
+## 登录面板
 
-## Notifications
+安装后访问：
 
-Open `通知设置` in the web panel to configure alert channels.
+```text
+http://服务器IP:8787
+```
 
-Supported channels:
+面板会显示正式登录页。
+
+登录账号密码在：
+
+```text
+/opt/aliyun-cdt-guard/web.env
+```
+
+字段：
+
+```env
+WEB_USERNAME=admin
+WEB_PASSWORD=安装时随机生成
+WEB_SESSION_SECRET=安装时随机生成
+```
+
+如果面板只通过 HTTPS 反代访问，可以在 `web.env` 里增加：
+
+```env
+WEB_COOKIE_SECURE=true
+```
+
+修改密码后重启：
+
+```bash
+sudo systemctl restart cdt-guard-web.service
+```
+
+## 域名反代
+
+生产环境建议使用域名访问：
+
+```text
+https://cdt.example.com
+```
+
+推荐结构：
+
+```text
+用户浏览器 -> HTTPS 域名 -> Caddy/Nginx -> 127.0.0.1:8787 -> Aliyun CDT Guard
+```
+
+Caddy 示例：
+
+```caddyfile
+cdt.example.com {
+  reverse_proxy 127.0.0.1:8787
+}
+```
+
+Nginx、Caddy、Cloudflare 和源站端口限制的详细说明见：
+
+[docs/reverse-proxy.md](docs/reverse-proxy.md)
+
+## 添加服务器
+
+进入 `新增/编辑` 页面，填写：
+
+- 产品自定义名字
+- 服务器 IP
+- ECS Instance ID
+- 阿里云区域 ID，例如 `cn-hongkong`
+- CDT 流量区域，例如 `cn-hongkong`
+- 阿里云 AccessKey ID
+- 阿里云 AccessKey Secret
+- CDT 统计方式
+- 流量池 ID
+- 预警阈值
+- 停机阈值
+- 恢复启动阈值
+- 登录网站、账号密码、SSH 备注、用途备注
+
+保存后面板会立即执行一次检查。
+
+## CDT 共享流量池
+
+如果一个阿里云账号下有多台非中国内地服务器，并且共享同一个 CDT 月度额度，建议这样配置：
+
+```text
+CDT 统计方式 = 账号非中国内地共享池
+流量池 ID    = global-200g
+预警阈值     = 160
+停机阈值     = 180
+恢复启动阈值 = 175
+```
+
+同一个池内的机器会看到同一个池内累计流量。
+
+策略：
+
+```text
+流量 >= 180GB  -> 停机
+流量 <= 175GB  -> 如果机器已停机，则恢复启动
+175GB - 180GB  -> 保持当前状态
+```
+
+这样可以避免临界值附近反复开关机。
+
+如果同一个阿里云账号用了多个 RAM AccessKey，只要这些机器填写同一个 `流量池 ID`，面板会把它们视为同一个共享池。不同阿里云账号不要共用同一个流量池 ID。
+
+## 通知
+
+进入 `通知设置` 页面可以配置：
 
 - Telegram Bot
-- Generic Webhook
-- SMTP email
+- 通用 Webhook
+- SMTP 邮件
 
-Notification rules:
+支持的通知规则：
 
-- Automatic start/stop actions
-- First traffic warning after entering the warning threshold
-- First new check error
-- Daily traffic report at a configured local time
+- 自动停机/启动通知
+- 首次流量预警通知
+- 首次检查错误通知
+- 每日流量报告
 
-Telegram setup:
+Telegram 配置流程：
 
-1. Create a bot with Telegram `@BotFather`.
-2. Copy the Bot Token into the panel.
-3. Send one message to the bot, or add it to your group/channel.
-4. Fill the Chat ID in the panel.
-5. Save settings and click `发送测试通知`.
+1. 在 Telegram 找 `@BotFather` 创建机器人。
+2. 复制 Bot Token。
+3. 给机器人发一条消息，或把机器人加入群组。
+4. 填写 Chat ID。
+5. 打开通知总开关和 Telegram 开关。
+6. 保存后点击 `发送测试通知`。
 
-The notification config is stored in:
+通知配置文件：
 
 ```text
 /opt/aliyun-cdt-guard/notifications.json
 /opt/aliyun-cdt-guard/notification_state.json
 ```
 
-Both files are written as root-only `0600`.
+权限为 `0600`。
 
-## Threshold Logic
+## 阿里云 RAM 权限
 
-Recommended values for Hong Kong CDT free traffic protection:
-
-```text
-warning_threshold_gb = 160
-stop_threshold_gb    = 180
-start_threshold_gb   = 175
-```
-
-Behavior:
-
-```text
-traffic >= 180GB  -> stop ECS
-traffic <= 175GB  -> start ECS if stopped
-175GB - 180GB     -> hold current state
-```
-
-This hysteresis avoids repeated start/stop actions around the boundary.
-
-When the next monthly CDT cycle resets and traffic drops below the start threshold, stopped instances can be started automatically again.
-
-## Files
-
-```text
-/opt/aliyun-cdt-guard/guard.py        traffic guard
-/opt/aliyun-cdt-guard/web.py          web panel
-/opt/aliyun-cdt-guard/instances.json  server configs and notes
-/opt/aliyun-cdt-guard/status.json     latest status
-/opt/aliyun-cdt-guard/history.jsonl   history events
-/opt/aliyun-cdt-guard/web.env         web username/password
-/opt/aliyun-cdt-guard/notifications.json notification settings
-```
-
-## Commands
-
-```bash
-cdt-guard status
-cdt-guard status --json
-systemctl status cdt-guard.timer
-systemctl status cdt-guard-web.service
-journalctl -u cdt-guard.service -n 100 --no-pager
-```
-
-Run a check manually:
-
-```bash
-sudo systemctl start cdt-guard.service
-```
-
-Restart the web panel:
-
-```bash
-sudo systemctl restart cdt-guard-web.service
-```
-
-## Security Notes
-
-- Do not expose this panel without a firewall or trusted network.
-- The panel uses HTTP Basic Auth by default.
-- `instances.json` contains AccessKeys and optional account passwords, and is installed as root-only `0600`.
-- `notifications.json` may contain Bot Tokens, Webhook URLs and SMTP passwords, and is installed as root-only `0600`.
-- For production use, put the panel behind HTTPS and restrict source IPs.
-- Use a RAM user with minimum permissions:
+最低权限建议：
 
 ```json
 {
@@ -212,10 +238,98 @@ sudo systemctl restart cdt-guard-web.service
 }
 ```
 
-## Uninstall
+如果后续要接入 EIP 实时云监控，可额外增加：
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/NorwayXZ/aliyun-cdt-guard/main/uninstall.sh | sudo bash
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "cms:QueryMetricList",
+        "cms:QueryMetricLast",
+        "vpc:DescribeEipAddresses",
+        "vpc:DescribeEipMonitorData"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
 ```
 
-The uninstall script removes services and the CLI wrapper, but keeps `/opt/aliyun-cdt-guard` so your secrets and history are not deleted accidentally.
+CDT 月度额度保护仍以 CDT 接口为准；EIP 云监控更适合实时趋势、突增提醒和分钟级曲线。
+
+## 文件结构
+
+```text
+/opt/aliyun-cdt-guard/guard.py                  巡检和自动启停
+/opt/aliyun-cdt-guard/web.py                    Web 面板
+/opt/aliyun-cdt-guard/notifications.py          通知发送器
+/opt/aliyun-cdt-guard/instances.json            服务器配置和备注
+/opt/aliyun-cdt-guard/status.json               最新状态
+/opt/aliyun-cdt-guard/history.jsonl             历史记录
+/opt/aliyun-cdt-guard/web.env                   登录账号密码
+/opt/aliyun-cdt-guard/guard.env                 全局阿里云兜底配置
+/opt/aliyun-cdt-guard/notifications.json        通知配置
+/opt/aliyun-cdt-guard/notification_state.json   通知状态
+```
+
+## 常用命令
+
+查看状态：
+
+```bash
+cdt-guard status
+cdt-guard status --json
+```
+
+手动巡检：
+
+```bash
+sudo systemctl start cdt-guard.service
+```
+
+查看服务：
+
+```bash
+systemctl status cdt-guard.timer
+systemctl status cdt-guard-web.service
+```
+
+查看日志：
+
+```bash
+journalctl -u cdt-guard.service -n 100 --no-pager
+journalctl -u cdt-guard-web.service -n 100 --no-pager
+```
+
+重启面板：
+
+```bash
+sudo systemctl restart cdt-guard-web.service
+```
+
+## 安全建议
+
+- 不建议长期直接暴露 `IP:8787`。
+- 建议使用域名 + HTTPS 反向代理。
+- 使用反代后，将 `CDT_GUARD_HOST` 改成 `127.0.0.1`。
+- `instances.json` 包含 AccessKey 和备注密码，默认 `0600`。
+- `notifications.json` 可能包含 Bot Token、Webhook URL、SMTP 密码，默认 `0600`。
+- 推荐使用 RAM 子账号，不要使用主账号 AccessKey。
+- 推荐给 RAM 用户最小权限。
+
+## 手动安装
+
+```bash
+git clone https://github.com/NorwayXZ/aliyun-cdt-guard.git
+cd aliyun-cdt-guard
+sudo bash install.sh
+```
+
+## 项目地址
+
+```text
+https://github.com/NorwayXZ/aliyun-cdt-guard
+```

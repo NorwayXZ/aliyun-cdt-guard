@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import base64
+import hashlib
+import hmac
 import html
 import json
 import os
 import secrets
 import subprocess
+import time
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -371,8 +374,229 @@ def flash_message(code: str) -> str:
         "notify_saved": "通知设置已保存",
         "notify_test_sent": "已发送测试通知，请检查接收端",
         "notify_test_failed": "测试通知发送失败，请检查配置",
+        "login_required": "请先登录",
+        "login_failed": "用户名或密码不正确",
+        "logged_out": "已退出登录",
     }
     return messages.get(code, code)
+
+
+def web_credentials() -> tuple[str, str, dict[str, str]]:
+    env = load_env(WEB_ENV_FILE)
+    return env.get("WEB_USERNAME", "admin"), env.get("WEB_PASSWORD", ""), env
+
+
+def session_secret(env: dict[str, str], password: str) -> bytes:
+    secret = env.get("WEB_SESSION_SECRET") or password or "aliyun-cdt-guard"
+    return secret.encode("utf-8")
+
+
+def cookie_parts(header: str) -> dict[str, str]:
+    cookies = {}
+    for part in header.split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        cookies[key.strip()] = value.strip()
+    return cookies
+
+
+def sign_session(username: str, expires: str, nonce: str, secret: bytes) -> str:
+    payload = f"{username}|{expires}|{nonce}".encode("utf-8")
+    return hmac.new(secret, payload, hashlib.sha256).hexdigest()
+
+
+def build_session_cookie(username: str, env: dict[str, str], password: str) -> str:
+    expires = str(int(time.time()) + int(env.get("WEB_SESSION_TTL", "86400")))
+    nonce = secrets.token_hex(12)
+    signature = sign_session(username, expires, nonce, session_secret(env, password))
+    secure = "; Secure" if env.get("WEB_COOKIE_SECURE", "").lower() in {"1", "true", "yes"} else ""
+    return f"cdt_guard_session={username}|{expires}|{nonce}|{signature}; Path=/; HttpOnly; SameSite=Lax{secure}"
+
+
+def clear_session_cookie() -> str:
+    return "cdt_guard_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+
+
+def render_login_page(query: dict[str, list[str]] | None = None) -> bytes:
+    query = query or {}
+    flash = query.get("flash", [""])[0]
+    flash_html = f'<div class="login-alert">{esc(flash_message(flash))}</div>' if flash else ""
+    html_doc = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 - Aliyun CDT Guard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css">
+  <style>
+    :root {{
+      --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --ink: #111827;
+      --muted: #64748b;
+      --accent: #1763d1;
+      --line: #e5e7eb;
+    }}
+    html, body {{ font-family: var(--font-sans); letter-spacing: 0; }}
+    body {{
+      min-height: 100vh;
+      background:
+        linear-gradient(135deg, rgba(23, 99, 209, .10), rgba(20, 131, 65, .07)),
+        #f6f7f9;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }}
+    .login-shell {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 420px;
+      min-height: 100vh;
+    }}
+    .login-brand {{
+      align-content: center;
+      display: grid;
+      padding: 56px;
+    }}
+    .brand-mark {{
+      background: #111827;
+      border-radius: 8px;
+      color: #fff;
+      display: inline-grid;
+      font-weight: 760;
+      height: 44px;
+      margin-bottom: 26px;
+      place-items: center;
+      width: 44px;
+    }}
+    .login-title {{
+      font-size: 34px;
+      font-weight: 760;
+      line-height: 1.18;
+      margin: 0 0 14px;
+      max-width: 620px;
+    }}
+    .login-copy {{
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+      max-width: 600px;
+    }}
+    .feature-strip {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 28px;
+    }}
+    .feature-pill {{
+      background: rgba(255,255,255,.72);
+      border: 1px solid rgba(229,231,235,.86);
+      border-radius: 999px;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 720;
+      padding: 7px 10px;
+    }}
+    .login-panel {{
+      align-content: center;
+      background: rgba(255,255,255,.84);
+      border-left: 1px solid rgba(229,231,235,.9);
+      box-shadow: -20px 0 60px rgba(15, 23, 42, .06);
+      display: grid;
+      padding: 38px;
+    }}
+    .login-card {{
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 18px 52px rgba(15, 23, 42, .08);
+      padding: 26px;
+    }}
+    .login-card h1 {{
+      font-size: 22px;
+      font-weight: 760;
+      margin: 0 0 6px;
+    }}
+    .login-card .sub {{
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 22px;
+    }}
+    .form-control {{
+      border-color: #d6d9df;
+      border-radius: 8px;
+      min-height: 44px;
+    }}
+    .form-control:focus {{
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(23, 99, 209, .12);
+    }}
+    .btn-primary {{
+      background: var(--accent);
+      border-color: var(--accent);
+      border-radius: 7px;
+      font-weight: 700;
+      min-height: 44px;
+      width: 100%;
+    }}
+    .login-alert {{
+      background: #fff7df;
+      border: 1px solid #ffd98a;
+      border-radius: 8px;
+      color: #8a5a00;
+      font-size: 13px;
+      margin-bottom: 14px;
+      padding: 10px 12px;
+    }}
+    .login-foot {{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+      margin-top: 16px;
+    }}
+    @media (max-width: 900px) {{
+      .login-shell {{ grid-template-columns: 1fr; }}
+      .login-brand {{ padding: 34px 22px 14px; }}
+      .login-panel {{ border-left: 0; box-shadow: none; padding: 22px; }}
+      .login-title {{ font-size: 28px; }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-brand">
+      <div>
+        <div class="brand-mark">CDT</div>
+        <h1 class="login-title">Aliyun CDT Guard</h1>
+        <p class="login-copy">集中管理阿里云 ECS、CDT 共享流量池、自动启停保护、历史曲线和通知报告。适合用域名反代后作为长期运维面板。</p>
+        <div class="feature-strip">
+          <span class="feature-pill">CDT 共享池保护</span>
+          <span class="feature-pill">ECS 启停控制</span>
+          <span class="feature-pill">Telegram 通知</span>
+          <span class="feature-pill">每日流量报告</span>
+        </div>
+      </div>
+    </section>
+    <section class="login-panel">
+      <form class="login-card" method="post" action="/login">
+        <h1>登录面板</h1>
+        <div class="sub">请输入安装时生成的后台账号密码</div>
+        {flash_html}
+        <div class="mb-3">
+          <label class="form-label">用户名</label>
+          <input class="form-control" name="username" autocomplete="username" required autofocus>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">密码</label>
+          <input class="form-control" type="password" name="password" autocomplete="current-password" required>
+        </div>
+        <button class="btn btn-primary" type="submit">登录</button>
+        <div class="login-foot">建议通过 HTTPS 反向代理访问，并限制面板源站端口只允许本机或可信 IP 访问。</div>
+      </form>
+    </section>
+  </main>
+</body>
+</html>
+"""
+    return html_doc.encode("utf-8")
 
 
 def page_shell(active: str, title: str, subtitle: str, body: str, actions: str = "", flash: str = "", auto_refresh: bool = True) -> bytes:
@@ -388,6 +612,12 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
     )
     flash_html = f'<div class="alert alert-success">{esc(flash_message(flash))}</div>' if flash else ""
     refresh_meta = '<meta http-equiv="refresh" content="60">' if auto_refresh else ""
+    header_actions = f"""
+      {actions}
+      <form class="ms-2" method="post" action="/logout">
+        <button class="btn btn-sm" type="submit">退出登录</button>
+      </form>
+    """
     html_doc = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1168,7 +1398,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
             <h2 class="page-title">{esc(title)}</h2>
             <div class="text-secondary small">{esc(subtitle)}</div>
           </div>
-          <div class="navbar-nav flex-row order-md-last ms-auto">{actions}</div>
+          <div class="navbar-nav flex-row order-md-last ms-auto">{header_actions}</div>
         </div>
       </header>
       <div class="page-body">
@@ -2469,12 +2699,20 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "AliyunCDTGuard/1.0"
 
     def do_GET(self):
-        if not self.is_authorized():
-            self.send_auth_required()
-            return
-
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
+        if parsed.path == "/healthz":
+            self.send_json({"ok": True})
+            return
+        if parsed.path == "/login":
+            if self.is_authorized():
+                self.redirect("/")
+            else:
+                self.send_bytes(render_login_page(query), "text/html; charset=utf-8")
+            return
+        if not self.is_authorized():
+            self.send_login_required()
+            return
         if parsed.path == "/":
             self.send_bytes(render_dashboard(query), "text/html; charset=utf-8")
             return
@@ -2503,20 +2741,24 @@ class Handler(BaseHTTPRequestHandler):
             days = int(query.get("days", ["1"])[0])
             self.send_json(read_traffic_series(server_id, days, pool_key))
             return
-        if parsed.path == "/healthz":
-            self.send_json({"ok": True})
-            return
-
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_POST(self):
-        if not self.is_authorized():
-            self.send_auth_required()
-            return
-
         parsed = urlparse(self.path)
         length = int(self.headers.get("Content-Length", "0"))
         fields = parse_qs(self.rfile.read(length).decode("utf-8"), keep_blank_values=True)
+        if parsed.path == "/login":
+            self.handle_login(fields)
+            return
+        if parsed.path == "/logout":
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header("Location", "/login?flash=logged_out")
+            self.send_header("Set-Cookie", clear_session_cookie())
+            self.end_headers()
+            return
+        if not self.is_authorized():
+            self.send_login_required()
+            return
         if parsed.path == "/servers/save":
             save_server(fields)
             run_guard_now()
@@ -2557,12 +2799,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def is_authorized(self) -> bool:
-        env = load_env(WEB_ENV_FILE)
-        username = env.get("WEB_USERNAME", "admin")
-        password = env.get("WEB_PASSWORD", "")
+        username, password, env = web_credentials()
         if not password:
             return False
+        if self.is_session_authorized(username, password, env):
+            return True
+        return self.is_basic_authorized(username, password)
 
+    def is_basic_authorized(self, username: str, password: str) -> bool:
         header = self.headers.get("Authorization", "")
         if not header.startswith("Basic "):
             return False
@@ -2571,14 +2815,38 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return False
         supplied_user, _, supplied_password = decoded.partition(":")
-        return supplied_user == username and supplied_password == password
+        return hmac.compare_digest(supplied_user, username) and hmac.compare_digest(supplied_password, password)
 
-    def send_auth_required(self):
-        self.send_response(HTTPStatus.UNAUTHORIZED)
-        self.send_header("WWW-Authenticate", 'Basic realm="Aliyun CDT Guard"')
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write("Authentication required\n".encode("utf-8"))
+    def is_session_authorized(self, username: str, password: str, env: dict[str, str]) -> bool:
+        cookie = cookie_parts(self.headers.get("Cookie", "")).get("cdt_guard_session", "")
+        parts = cookie.split("|")
+        if len(parts) != 4:
+            return False
+        supplied_user, expires, nonce, signature = parts
+        if supplied_user != username:
+            return False
+        try:
+            if int(expires) < int(time.time()):
+                return False
+        except ValueError:
+            return False
+        expected = sign_session(supplied_user, expires, nonce, session_secret(env, password))
+        return hmac.compare_digest(signature, expected)
+
+    def handle_login(self, fields: dict[str, list[str]]) -> None:
+        username, password, env = web_credentials()
+        supplied_user = form_value(fields, "username")
+        supplied_password = form_value(fields, "password")
+        if password and hmac.compare_digest(supplied_user, username) and hmac.compare_digest(supplied_password, password):
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header("Location", "/")
+            self.send_header("Set-Cookie", build_session_cookie(username, env, password))
+            self.end_headers()
+            return
+        self.redirect("/login?flash=login_failed")
+
+    def send_login_required(self):
+        self.redirect("/login?flash=login_required")
 
     def redirect(self, location: str):
         self.send_response(HTTPStatus.SEE_OTHER)

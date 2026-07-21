@@ -51,6 +51,7 @@ SRC_DIR="$(prepare_source)"
 install -d -m 700 "$INSTALL_DIR"
 install -m 755 "$SRC_DIR/guard.py" "$INSTALL_DIR/guard.py"
 install -m 755 "$SRC_DIR/web.py" "$INSTALL_DIR/web.py"
+install -m 755 "$SRC_DIR/notifications.py" "$INSTALL_DIR/notifications.py"
 install -m 644 "$SRC_DIR/cdt-guard.service" /etc/systemd/system/cdt-guard.service
 install -m 644 "$SRC_DIR/cdt-guard.timer" /etc/systemd/system/cdt-guard.timer
 install -m 644 "$SRC_DIR/cdt-guard-web.service" /etc/systemd/system/cdt-guard-web.service
@@ -89,15 +90,22 @@ fi
 
 if [ ! -f "$INSTALL_DIR/web.env" ]; then
   WEB_PASS="$(openssl rand -base64 24 | tr -d '\n')"
+  WEB_SESSION_SECRET="$(openssl rand -hex 32)"
   umask 077
   cat > "$INSTALL_DIR/web.env" <<EOF
 WEB_USERNAME=$WEB_USER
 WEB_PASSWORD=$WEB_PASS
+WEB_SESSION_SECRET=$WEB_SESSION_SECRET
 CDT_GUARD_HOST=0.0.0.0
 CDT_GUARD_PORT=$WEB_PORT
 EOF
 else
   WEB_PASS="$(sed -n 's/^WEB_PASSWORD=//p' "$INSTALL_DIR/web.env" | head -n 1)"
+  if ! grep -q '^WEB_SESSION_SECRET=' "$INSTALL_DIR/web.env"; then
+    WEB_SESSION_SECRET="$(openssl rand -hex 32)"
+    umask 077
+    printf '\nWEB_SESSION_SECRET=%s\n' "$WEB_SESSION_SECRET" >> "$INSTALL_DIR/web.env"
+  fi
 fi
 
 chmod 700 "$INSTALL_DIR"
