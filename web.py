@@ -23,6 +23,7 @@ WEB_ENV_FILE = BASE_DIR / "web.env"
 CONFIG_FILE = BASE_DIR / "instances.json"
 STATUS_FILE = BASE_DIR / "status.json"
 HISTORY_FILE = BASE_DIR / "history.jsonl"
+DOMAIN_PROXY_FILE = BASE_DIR / "domain_proxy.json"
 TRAFFIC_SCOPE_REGION = "region"
 TRAFFIC_SCOPE_ACCOUNT_NON_CHINA = "account_non_china"
 TRAFFIC_SCOPE_ACCOUNT_ALL = "account_all"
@@ -490,6 +491,7 @@ def flash_message(code: str) -> str:
         "telegram_discover_failed": "获取 Telegram Chat ID 失败，请确认 Bot Token 正确且你已经给机器人发过消息",
         "telegram_chat_saved": "Telegram Chat ID 已追加到已保存渠道",
         "telegram_chat_removed": "Telegram Chat ID 已移除",
+        "domain_saved": "域名反代配置已保存，下面的配置片段已按新域名生成",
         "login_required": "请先登录",
         "login_failed": "用户名或密码不正确",
         "logged_out": "已退出登录",
@@ -735,6 +737,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
         ("/servers/new", "servers", "新增/编辑"),
         ("/logs", "logs", "服务器日志"),
         ("/notifications", "notifications", "通知设置"),
+        ("/domain", "domain", "域名反代"),
     ]
     nav_html = "".join(
         f'<li class="nav-item {"active" if key == active else ""}"><a class="nav-link" href="{href}"><span class="nav-link-title">{label}</span></a></li>'
@@ -1817,6 +1820,55 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       margin: 10px 0 16px;
       padding: 12px 14px;
     }}
+    .proxy-grid {{
+      display: grid;
+      gap: 16px;
+      grid-template-columns: minmax(0, 1fr) 360px;
+    }}
+    .proxy-step-grid {{
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }}
+    .proxy-step-card {{
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }}
+    .proxy-step-card strong {{
+      color: #111827;
+      display: block;
+      font-size: 14px;
+      margin-bottom: 6px;
+    }}
+    .proxy-step-card span {{
+      color: var(--muted);
+      display: block;
+      font-size: 12px;
+      line-height: 1.55;
+    }}
+    .config-block {{
+      background: #0f172a;
+      border-radius: 8px;
+      color: #e5edf7;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.65;
+      margin: 10px 0 0;
+      overflow-x: auto;
+      padding: 14px;
+      white-space: pre;
+    }}
+    .status-note {{
+      background: #eef6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      color: #174ea6;
+      font-size: 13px;
+      line-height: 1.6;
+      padding: 12px 14px;
+    }}
     .chat-candidates {{
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -1985,6 +2037,7 @@ def page_shell(active: str, title: str, subtitle: str, body: str, actions: str =
       .navbar-vertical {{ width: 100%; }}
       .container-xl {{ padding-left: 16px; padding-right: 16px; }}
       .credential-grid, .log-layout, .log-meta, .asset-filter-bar, .detail-grid {{ grid-template-columns: 1fr; }}
+      .proxy-grid {{ grid-template-columns: 1fr; }}
       .channel-status {{ grid-template-columns: 1fr; }}
       .chat-candidate {{ grid-template-columns: 1fr; }}
       .telegram-command-grid {{ grid-template-columns: 1fr; }}
@@ -3553,6 +3606,161 @@ def checked(fields: dict[str, list[str]], name: str) -> bool:
     return form_value(fields, name) == "1"
 
 
+def default_domain_proxy_config() -> dict:
+    env = load_env(WEB_ENV_FILE)
+    return {
+        "domain": "",
+        "origin_ip": "",
+        "origin_port": env.get("CDT_GUARD_PORT", "8787"),
+        "proxy_type": "caddy",
+        "cloudflare_proxy": True,
+    }
+
+
+def read_domain_proxy_config() -> dict:
+    config = default_domain_proxy_config()
+    saved = read_json(DOMAIN_PROXY_FILE, {})
+    if isinstance(saved, dict):
+        config.update({key: value for key, value in saved.items() if value is not None})
+    return config
+
+
+def save_domain_proxy(fields: dict[str, list[str]]) -> None:
+    config = {
+        "domain": form_value(fields, "domain").strip().lower(),
+        "origin_ip": form_value(fields, "origin_ip").strip(),
+        "origin_port": form_value(fields, "origin_port", "8787").strip() or "8787",
+        "proxy_type": form_value(fields, "proxy_type", "caddy") or "caddy",
+        "cloudflare_proxy": checked(fields, "cloudflare_proxy"),
+    }
+    write_json(DOMAIN_PROXY_FILE, config)
+
+
+def render_code_block(text: str) -> str:
+    return f'<pre class="config-block"><code>{esc(text.strip())}</code></pre>'
+
+
+def render_domain_page(query: dict[str, list[str]] | None = None) -> bytes:
+    query = query or {}
+    config = read_domain_proxy_config()
+    domain = str(config.get("domain") or "cdt.example.com")
+    origin_ip = str(config.get("origin_ip") or "你的服务器公网 IP")
+    origin_port = str(config.get("origin_port") or "8787")
+    proxy_type = str(config.get("proxy_type") or "caddy")
+    dns_name = domain.split(".", 1)[0] if "." in domain else domain
+    caddy_config = f"""
+{domain} {{
+  reverse_proxy 127.0.0.1:{origin_port}
+}}
+"""
+    nginx_config = f"""
+server {{
+  listen 80;
+  server_name {domain};
+
+  location / {{
+    proxy_pass http://127.0.0.1:{origin_port};
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }}
+}}
+"""
+    env_config = "WEB_COOKIE_SECURE=true"
+    body = f"""
+    <div class="proxy-grid">
+      <form class="card save-form" method="post" action="/domain/save" data-save-form>
+        <div class="card-header">
+          <h3 class="card-title">绑定域名 / 反代向导</h3>
+        </div>
+        <div class="card-body">
+          <div class="setup-box">
+            保存域名信息后，下面会自动生成 Cloudflare DNS、Caddy、Nginx 和 web.env 配置。这里不会自动修改 Cloudflare，避免误动你的 DNS。
+          </div>
+          <div class="credential-grid">
+            {input_field("domain", "面板域名", config.get("domain", ""), placeholder="例如：cdt.example.com", hint="在 Cloudflare DNS 里添加这个子域名。")}
+            {input_field("origin_ip", "源站公网 IP", config.get("origin_ip", ""), placeholder="例如：154.83.98.194", hint="A 记录指向这台安装面板的服务器 IP。")}
+          </div>
+          <div class="credential-grid">
+            {input_field("origin_port", "面板源站端口", config.get("origin_port", "8787"), "number", hint="默认 8787；如果安装时改过 WEB_PORT，就填实际端口。")}
+            {select_field("proxy_type", "推荐反代方式", proxy_type, [("caddy", "Caddy（推荐，自动 HTTPS）"), ("nginx", "Nginx（手动配置证书）")])}
+          </div>
+          {checkbox_field("cloudflare_proxy", "Cloudflare 开启代理（橙色云）", bool(config.get("cloudflare_proxy", True)), "开启后浏览器访问域名会走 Cloudflare；SSL/TLS 建议使用 Full 或 Full strict。")}
+        </div>
+        <div class="card-footer d-flex align-items-center gap-2">
+          <div class="submit-feedback"><span class="spinner-dot"></span><span>正在保存域名配置...</span></div>
+          <button class="btn btn-primary btn-submit ms-auto" type="submit" data-submit-button data-loading-text="正在保存...">保存域名配置</button>
+        </div>
+      </form>
+
+      <aside class="card guide-panel">
+        <div class="card-header"><h3 class="card-title">操作步骤</h3></div>
+        <div class="card-body">
+          <div class="guide-step">
+            <strong>1. Cloudflare 添加 DNS</strong>
+            <span>类型选 A，名称填子域名前缀，例如 cdt；IPv4 地址填源站公网 IP；代理状态建议开启。</span>
+          </div>
+          <div class="guide-step">
+            <strong>2. 服务器安装反代</strong>
+            <span>推荐 Caddy。它会自动申请 HTTPS 证书，并把域名流量转发到 127.0.0.1:{esc(origin_port)}。</span>
+          </div>
+          <div class="guide-step">
+            <strong>3. 修改 Cookie 安全项</strong>
+            <span>确认域名 HTTPS 可访问后，在 web.env 里开启 WEB_COOKIE_SECURE=true 并重启面板。</span>
+          </div>
+          <div class="guide-step">
+            <strong>4. 收紧源站端口</strong>
+            <span>域名确认可用后，可以用防火墙限制 8787 只允许本机/反代访问。</span>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header"><h3 class="card-title">生成配置</h3></div>
+      <div class="card-body">
+        <div class="proxy-step-grid">
+          <div class="proxy-step-card">
+            <strong>Cloudflare DNS</strong>
+            <span>类型：A<br>名称：{esc(dns_name)}<br>IPv4：{esc(origin_ip)}<br>代理：{"开启（橙色云）" if config.get("cloudflare_proxy", True) else "关闭（灰色云）"}</span>
+          </div>
+          <div class="proxy-step-card">
+            <strong>Cloudflare SSL/TLS</strong>
+            <span>建议选择 Full 或 Full strict。不要使用 Flexible，否则容易出现跳转或 Cookie 问题。</span>
+          </div>
+          <div class="proxy-step-card">
+            <strong>面板访问地址</strong>
+            <span>配置完成后访问：https://{esc(domain)}</span>
+          </div>
+        </div>
+
+        <h3 class="form-section-title mt-4">Caddyfile（推荐）</h3>
+        {render_code_block(caddy_config)}
+
+        <h3 class="form-section-title mt-4">Nginx 反代示例</h3>
+        {render_code_block(nginx_config)}
+
+        <h3 class="form-section-title mt-4">web.env 建议</h3>
+        {render_code_block(env_config)}
+
+        <div class="status-note mt-3">
+          这一页先做配置向导，不自动改 DNS。以后如果你愿意提供 Cloudflare API Token，可以再加“一键创建 DNS 记录”。
+        </div>
+      </div>
+    </div>
+    """
+    return page_shell(
+        "domain",
+        "域名反代",
+        "用 Cloudflare + Caddy/Nginx 把 IP:端口 变成 HTTPS 域名",
+        body,
+        actions='<a href="/" class="btn">返回总览</a>',
+        flash=query.get("flash", [""])[0],
+        auto_refresh=False,
+    )
+
+
 def save_notifications(fields: dict[str, list[str]]) -> None:
     existing = notifications.load_config()
     telegram_token = form_value(fields, "telegram_bot_token")
@@ -4028,6 +4236,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/notifications":
             self.send_bytes(render_notifications_page(query), "text/html; charset=utf-8")
             return
+        if parsed.path == "/domain":
+            self.send_bytes(render_domain_page(query), "text/html; charset=utf-8")
+            return
         if parsed.path == "/api/status":
             self.send_json(read_json(STATUS_FILE, {"error": "status not found"}))
             return
@@ -4091,6 +4302,10 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/notifications/save":
             save_notifications(fields)
             self.redirect("/notifications?flash=notify_saved")
+            return
+        if parsed.path == "/domain/save":
+            save_domain_proxy(fields)
+            self.redirect("/domain?flash=domain_saved")
             return
         if parsed.path == "/notifications/test":
             result = notifications.send_test_message()

@@ -32,6 +32,7 @@ Aliyun CDT Guard 是一个自托管的阿里云 ECS / CDT 流量保护面板。
 - 支持服务器日志侧栏
 - 支持 Telegram Bot、Webhook、SMTP 邮件通知
 - 支持每日流量统计报告
+- 支持域名反代向导，生成 Cloudflare、Caddy、Nginx 配置
 - systemd timer 默认每分钟巡检一次
 - 无数据库，配置和历史写在本地 JSON / JSONL 文件
 
